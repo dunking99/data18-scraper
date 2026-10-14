@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""Tiny dashboard: type a performer name, see their videos with categories.   .venv/bin/python server.py  ->  http://127.0.0.1:8790"""
+import csv
+import hashlib
+import json
+import re
+import subprocess
+import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import requests
+
+import scraper
+
+HERE = Path(__file__).parent
+CACHE = HERE / "data" / "results"
+IMG_CACHE = HERE / "data" / "imgcache"
+PORT = 8790
+MAX_IMG_BYTES = 25 * 1024 * 1024
+
+scrape_lock = threading.Lock()   # one scrape at a time, keeps us polite to the site
+jobs = {}                        # slug -> job dict
+jobs_lock = threading.Lock()
+
+
+def save_result(result):
+    if not result["videos"]:     # never overwrite a good file with an empty result
+        return
+    CACHE.mkdir(parents=True, exist_ok=True)
+    result["total"] = len(result["videos"])
+    path = CACHE / f"{result['slug']}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1))
+    tmp.replace(path)
+
+
+def missing_details(result):
+    return sum(1 for v in result["videos"] if "categories" not in v or "galleries" not in v or "tags" not in v)
+
+
+def run_job(job, name, refresh):
+    """Background thread: listing (unless cached), then categories for any video that lacks them."""
+    try:
+        with scrape_lock:
+            slug = job["slug"]
+            cached = CACHE / f"{slug}.json"
+            if cached.exists() and not refresh:
+                result = json.loads(cached.read_text())
+                job["cached"] = True
+            else:
+                job["phase"] = "listing"
+                result = {"slug": slug, "total": 0, "videos": []}
+                job["result"] = result
+                listing = scraper.scrape_listing(
+                    name, progress=lambda page, n: job.update(listing_page=page, listing_count=n))
+                result.update(listing)
+                job["cached"] = False
+                save_result(result)
+            job["result"] = result
+            if result["videos"]:
+                scraper.apply_cached_details(result)
+                job["details_total"] = len(result["videos"])
+                job["details_done"] = job["details_total"] - missing_details(result)
+                if missing_details(result):
+                    job["phase"] = "details"
+
+                    def prog(done, total):
+                        job["details_done"], job["details_total"] = done, total
+                        if done % 25 == 0:
+                            save_result(result)
+                    scraper.enrich(result, scraper.load_session(), prog)
+                save_result(result)
+            job["phase"] = "done"
+    except scraper.SessionError as e:
+        job.update(phase="error", error=str(e), needs_setup=True)
+    except LookupError as e:
+        job.update(phase="error", error=str(e), status=404)
+    except Exception as e:
+        job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+def start_job(name, refresh):
+    slug = scraper.slugify(name)
+    if not slug:
+        raise ValueError("empty name")
+    with jobs_lock:
+        job = jobs.get(slug)
+        if job and job["phase"] in ("queued", "listing", "details"):
+            return job                       # already running: just follow it
+        job = {"slug": slug, "phase": "queued", "result": None, "error": None}
+        jobs[slug] = job
+    threading.Thread(target=run_job, args=(job, name, refresh), daemon=True).start()
+    return job
+
+
+_tag_index = {"key": None, "by_tag": {}}
+
+
+def tag_index():
+    """tag slug -> {scene_id: video} across every saved performer. Rebuilt only when a results file changes."""
+    files = sorted(CACHE.glob("*.json")) if CACHE.exists() else []
+    key = tuple((f.name, f.stat().st_mtime_ns) for f in files)
+    if _tag_index["key"] == key:
+        return _tag_index["by_tag"]
+    by_tag = {}
+    for f in files:
+        try:
+            result = json.loads(f.read_text())
+        except Exception:
+            continue
+        for v in result.get("videos", []):
+            for slug in v.get("tags", []):
+                rec = by_tag.setdefault(slug, {}).get(v["scene_id"])
+                if rec is None:
+                    rec = by_tag[slug][v["scene_id"]] = {
+                        "scene_id": v["scene_id"], "title": v["title"], "url": v["url"], "date": v.get("date", ""),
+                        "number": v.get("number", ""), "thumbnail": v.get("thumbnail", ""), "studio": v.get("studio", ""),
+                        "performers": v.get("performers", []), "scraped_from": []}
+                if result["slug"] not in rec["scraped_from"]:
+                    rec["scraped_from"].append(result["slug"])
+    _tag_index.update(key=key, by_tag=by_tag)
+    return by_tag
+
+
+studios_job = {"phase": "idle", "page": 0, "count": 0, "error": None}
+
+
+def run_studios_job():
+    try:
+        with scrape_lock:
+            scraper.scrape_studios(progress=lambda page, n: studios_job.update(page=page, count=n))
+        studios_job["phase"] = "done"
+    except scraper.SessionError as e:
+        studios_job.update(phase="error", error=str(e), needs_setup=True)
+    except Exception as e:
+        studios_job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+stars_job = {"phase": "idle", "page": 0, "count": 0, "error": None, "started": 0}
+
+
+def run_stars_job():
+    try:
+        with scrape_lock:
+            scraper.scrape_pornstars(progress=lambda page, n: stars_job.update(page=page, count=n))
+        stars_job["phase"] = "done"
+    except scraper.SessionError as e:
+        stars_job.update(phase="error", error=str(e), needs_setup=True)
+    except Exception as e:
+        stars_job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+def snapshot(job):
+    result = job["result"]
+    out = {k: v for k, v in job.items() if k != "result"}
+    out["videos"] = list(result["videos"]) if result else []
+    out["total"] = len(out["videos"])
+    return out
+
+
+def fetch_image(url):
+    """(bytes, content_type) for an image on a *.dt18.com host. The image servers refuse requests that don't
+    come from data18 itself, so the server adds that referrer and keeps a copy on disk."""
+    u = urlparse(url)
+    if u.scheme != "https" or not (u.hostname or "").endswith(".dt18.com"):
+        raise ValueError("only https://*.dt18.com images are served")
+    key = hashlib.sha1(url.encode()).hexdigest()
+    IMG_CACHE.mkdir(parents=True, exist_ok=True)
+    cached = next(iter(IMG_CACHE.glob(key + ".*")), None)
+    if cached:
+        return cached.read_bytes(), "image/" + cached.suffix.lstrip(".")
+    r = requests.get(url, timeout=25, headers={"Referer": "https://www.data18.com/", "User-Agent": scraper.DEFAULT_UA})
+    ctype = r.headers.get("Content-Type", "").split(";")[0]
+    if r.status_code != 200 or not ctype.startswith("image/") or len(r.content) > MAX_IMG_BYTES:
+        raise LookupError(f"image unavailable ({r.status_code})")
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "img")
+    tmp = IMG_CACHE / f"{key}.tmp{threading.get_ident()}"
+    tmp.write_bytes(r.content)
+    tmp.replace(IMG_CACHE / f"{key}.{ext}")
+    return r.content, ctype
+
+
+# ---- position models: run them on one video's stills and photosets (each model runs in ITS OWN python, as a subprocess)
+CLIP_DIR = Path("/Users/hugodyson/instagram-bot-2/CLIP Training")
+MODEL_PY = CLIP_DIR / ".venv" / "bin" / "python"
+MODEL_SCRIPT = CLIP_DIR / "scripts" / "classify_images.py"
+MODELS = {                       # id -> label shown in the dashboard, and the file whose date is the model's version
+    "b32": {"label": "Yours (B/32)", "pkl": CLIP_DIR / "models" / "position_clf.pkl", "has_sub": True},
+    "l14": {"label": "New (L/14)", "pkl": CLIP_DIR / "models" / "experimental" / "l14_clf.pkl", "has_sub": False},
+}
+ACTIVE = ["b32"]                 # the models that are run and shown (the L/14 entry above is kept but switched off)
+PRED_FILE = HERE / "data" / "predictions.json"
+pred_jobs = {}                   # scene_id -> job dict
+pred_lock = threading.Lock()     # guards pred_jobs and the predictions file
+model_lock = threading.Lock()    # one model run at a time (they are heavy)
+KIND_RE = [("stills", re.compile(r"^video\s?stills", re.I)), ("photoset", re.compile(r"^photoset", re.I))]   # Primary and Trailer are skipped
+RUNNING = ("queued", "galleries", "downloading", "model")
+
+
+def gallery_kind(label):
+    return next((k for k, rx in KIND_RE if rx.match(label)), None)
+
+
+def model_version(mid):
+    pkl = MODELS[mid]["pkl"]
+    return time.strftime("trained %Y-%m-%d %H:%M", time.localtime(pkl.stat().st_mtime)) if pkl.exists() else "missing"
+
+
+def load_predictions():
+    """{"models": {id: {"meta": {...}, "images": {url: prediction}}}}. Migrates the first single-model file format."""
+    try:
+        d = json.loads(PRED_FILE.read_text())
+    except Exception:
+        d = {}
+    if "images" in d and "models" not in d:                      # old format: everything was the L/14 model
+        meta = dict(d.get("model", {}))
+        if str(meta.get("version", "")).startswith("ViT-L/14"):      # the old version string was "<name>, trained <date>"
+            meta["version"] = meta["version"].split(", ", 1)[-1]
+        d = {"models": {"l14": {"meta": meta, "images": d["images"]}}}
+    d.setdefault("models", {})
+    for mid in MODELS:
+        d["models"].setdefault(mid, {"meta": {}, "images": {}})
+    return d
+
+
+def save_predictions(mid, new_images):
+    with pred_lock:                                    # merge, never overwrite: partial runs accumulate
+        d = load_predictions()
+        m = d["models"][mid]
+        m["meta"] = {"name": MODELS[mid]["label"], "version": model_version(mid), "run_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        m["images"].update(new_images)
+        tmp = PRED_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False))
+        tmp.replace(PRED_FILE)
+
+
+def scene_items(sid):
+    """[(url, gallery label, kind)] for the stills and photosets of one scene (full-size addresses, fetched on demand)."""
+    galleries = scraper.scene_galleries(sid)
+    if galleries is None:
+        if scraper.fetch_scene_details(scraper.load_session(), sid, scraper.BASE + "/") is None:
+            raise RuntimeError("data18 didn't answer, try again in a moment")
+        galleries = scraper.scene_galleries(sid)
+    return [(im["f"], g["label"], gallery_kind(g["label"])) for g in galleries or [] if gallery_kind(g["label"])
+            for im in g["images"]]
+
+
+def run_predict(job, sid, refresh, only=None):
+    try:
+        job["phase"] = "galleries"
+        items = scene_items(sid)
+        if only is not None:                                           # a hand-picked set of images
+            items = [it for it in items if it[0] in only]
+        if not items:
+            raise LookupError("This video has no Video Stills or Photosets to run the models on.")
+        for mid in ACTIVE:
+            if not MODELS[mid]["pkl"].exists():
+                raise RuntimeError(f"The {MODELS[mid]['label']} model file is missing ({MODELS[mid]['pkl'].name}).")
+        if not MODEL_PY.exists():
+            raise RuntimeError("The model environment is missing (CLIP Training/.venv).")
+        saved = load_predictions()["models"]
+        todo = {mid: (items if refresh else [it for it in items if it[0] not in saved[mid]["images"]]) for mid in ACTIVE}
+        need = {it[0]: it for mid in ACTIVE for it in todo[mid]}          # every image at least one model still has to judge
+        job.update(total=len(need), done=0)
+        paths = {}                                                          # image url -> cached file on disk
+        if need:
+            job["phase"] = "downloading"
+            for n, (url, label, kind) in enumerate(need.values(), 1):
+                key = hashlib.sha1(url.encode()).hexdigest()
+                if not next(iter(IMG_CACHE.glob(key + ".*")), None):
+                    scraper._rate()
+                    try:
+                        fetch_image(url)
+                    except Exception:
+                        job["failed"] = job.get("failed", 0) + 1
+                cached = next((c for c in IMG_CACHE.glob(key + ".*") if c.suffix != ".tmp"), None)
+                if cached:
+                    paths[url] = str(cached)
+                job["done"] = n
+            if not paths:
+                raise RuntimeError("None of the images could be downloaded.")
+            for mid in ACTIVE:
+                mine = [it for it in todo[mid] if it[0] in paths]
+                if not mine:
+                    continue
+                job.update(phase="model", model=MODELS[mid]["label"])
+                by_path = {paths[it[0]]: it for it in mine}
+                out, files = {}, list(by_path)
+                with model_lock:
+                    for i in range(0, len(files), 300):
+                        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
+                            csv_path = tf.name
+                        r = subprocess.run([str(MODEL_PY), str(MODEL_SCRIPT), *files[i:i + 300], "--model", mid, "--top", "3",
+                                            "--unsure-below", "0.5", "--csv", csv_path], capture_output=True, text=True, timeout=1800)
+                        if r.returncode:
+                            raise RuntimeError(f"The {MODELS[mid]['label']} model failed: " + (r.stderr or r.stdout)[-300:])
+                        with open(csv_path, newline="") as fh:
+                            for row in csv.DictReader(fh):
+                                url, label, kind = by_path[row["file"]]
+                                top = [[g.rsplit(" ", 1)[0], float(g.rsplit(" ", 1)[1])] for k, g in row.items() if k.startswith("guess") and g]
+                                out[url] = {"scene_id": sid, "gallery": label, "gallery_type": kind, "label": row["answer"],
+                                            "sub": row.get("sub") or None, "sub_conf": float(row["sub_conf"]) if row.get("sub_conf") else None,
+                                            "best": top[0][0], "confidence": top[0][1], "top": top}
+                        Path(csv_path).unlink(missing_ok=True)
+                save_predictions(mid, out)
+        job["phase"] = "done"
+    except scraper.SessionError as e:
+        job.update(phase="error", error=str(e), needs_setup=True)
+    except Exception as e:
+        job.update(phase="error", error=str(e) if isinstance(e, (LookupError, RuntimeError)) else f"{type(e).__name__}: {e}")
+
+
+def start_predict(sid, refresh, only=None):
+    if not re.fullmatch(r"\d+", sid):
+        raise ValueError("bad scene id")
+    with pred_lock:
+        job = pred_jobs.get(sid)
+        if job and job["phase"] in RUNNING:
+            return job
+        job = {"scene_id": sid, "phase": "queued", "error": None}
+        pred_jobs[sid] = job
+    threading.Thread(target=run_predict, args=(job, sid, refresh, only), daemon=True).start()
+    return job
+
+
+def prediction_results(sid):
+    """Stills and photosets of one video; each image carries every model's prediction. complete = no model is missing on any image."""
+    saved = load_predictions()["models"]
+    galleries = (scraper._load_details().get(sid) or {}).get("galleries", [])
+    out, complete = [], True
+    for g in galleries:
+        k = gallery_kind(g["label"])
+        if not k:
+            continue
+        imgs = []
+        for im in g.get("images", []):
+            have = {mid: saved[mid]["images"][im["f"]] for mid in ACTIVE if im["f"] in saved[mid]["images"]}
+            complete = complete and len(have) == len(ACTIVE)
+            if have:
+                imgs.append({"f": im["f"], "models": have})
+        if imgs:
+            out.append({"label": g["label"], "kind": k, "count": g["count"], "images": imgs})
+    models = {mid: {"label": MODELS[mid]["label"], "has_sub": MODELS[mid]["has_sub"], "version": saved[mid]["meta"].get("version"),
+                    "current_version": model_version(mid)} for mid in ACTIVE}
+    return {"galleries": out, "models": models, "complete": bool(out) and complete}
+
+def creators_list():
+    """Every performer that has been scraped (the saved results files), with how many videos and how many have model results."""
+    stars = {x["slug"]: x["name"] for x in (scraper.load_pornstars() or {}).get("stars", [])}
+    predicted = {v.get("scene_id") for m in ACTIVE for v in load_predictions()["models"][m]["images"].values()}
+    out = []
+    for f in sorted(CACHE.glob("*.json")) if CACHE.exists() else []:
+        try:
+            r = json.loads(f.read_text())
+        except Exception:
+            continue
+        vids = r.get("videos", [])
+        slug = r.get("slug") or f.stem
+        out.append({"slug": slug, "name": stars.get(slug) or slug.replace("-", " ").title(), "videos": len(vids),
+                    "with_model": sum(1 for v in vids if v.get("scene_id") in predicted),
+                    "thumbnail": next((v.get("thumbnail") for v in vids if v.get("thumbnail")), ""),
+                    "scraped": int(f.stat().st_mtime)})
+    out.sort(key=lambda c: c["scraped"], reverse=True)
+    return out
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/":
+            return self.send(200, (HERE / "static" / "index.html").read_bytes(), "text/html")
+        if u.path == "/api/status":
+            saved = sorted(p.stem for p in CACHE.glob("*.json")) if CACHE.exists() else []
+            return self.send(200, {"session": scraper.SESSION_FILE.exists(), "saved": saved})
+        if u.path == "/api/scrape":          # start (or follow) a job
+            try:
+                job = start_job((q.get("name") or [""])[0], q.get("refresh") == ["1"])
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, {"slug": job["slug"]})
+        if u.path == "/api/job":             # poll a job
+            slug = (q.get("slug") or [""])[0]
+            job = jobs.get(slug)
+            if not job:
+                return self.send(404, {"error": "no such job"})
+            return self.send(200, snapshot(job))
+        if u.path == "/api/studios":         # saved studio list
+            return self.send(200, scraper.load_studios() or {"studios": [], "total": 0, "scraped_at": None})
+        if u.path == "/api/studios/refresh":  # re-scrape the list from data18 in the background
+            with jobs_lock:
+                if studios_job["phase"] != "running":
+                    studios_job.update(phase="running", page=0, count=0, error=None, needs_setup=False)
+                    threading.Thread(target=run_studios_job, daemon=True).start()
+            return self.send(200, dict(studios_job))
+        if u.path == "/api/studios/job":
+            return self.send(200, dict(studios_job))
+        if u.path == "/api/tags":            # the tag list, with how many scraped videos each one has
+            data = scraper.load_tags() or {"tags": [], "total": 0, "scraped_at": None}
+            idx = tag_index()
+            known = {t["slug"] for t in data["tags"]}
+            return self.send(200, {**data,
+                                   "tags": [{**t, "videos": len(idx.get(t["slug"], {}))} for t in data["tags"]],
+                                   "unlisted": sorted(sl for sl in idx if sl not in known)})
+        if u.path == "/api/tag-videos":      # the scraped videos that have one tag
+            vids = list(tag_index().get((q.get("slug") or [""])[0], {}).values())
+            vids.sort(key=lambda v: int(v["scene_id"]), reverse=True)
+            return self.send(200, {"videos": vids})
+        if u.path == "/api/pornstars":       # compact rows: [slug, name, picture, scenes, movies, rank]
+            d = scraper.load_pornstars()
+            if not d:
+                return self.send(200, {"stars": [], "total": 0, "scraped_at": None})
+            return self.send(200, {"total": d["total"], "scraped_at": d["scraped_at"],
+                                   "stars": [[x["slug"], x["name"], x["picture"], x["scenes"], x["movies"], x["rank"]] for x in d["stars"]]})
+        if u.path == "/api/pornstars/refresh":
+            with jobs_lock:
+                if stars_job["phase"] != "running":
+                    stars_job.update(phase="running", page=0, count=0, error=None, needs_setup=False, started=time.time())
+                    threading.Thread(target=run_stars_job, daemon=True).start()
+            return self.send(200, dict(stars_job))
+        if u.path == "/api/pornstars/job":
+            return self.send(200, dict(stars_job))
+        if u.path == "/api/photos":          # galleries (with image addresses) for one video
+            galleries = scraper.scene_galleries((q.get("scene_id") or [""])[0])
+            if galleries is None:
+                return self.send(404, {"error": "photos not fetched yet"})
+            return self.send(200, {"galleries": galleries})
+        if u.path == "/api/creators":        # every performer scraped so far
+            return self.send(200, {"creators": creators_list()})
+        if u.path == "/api/predict":         # start (or follow) a model run on one video
+            try:
+                job = start_predict((q.get("scene_id") or [""])[0], q.get("refresh") == ["1"])
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, dict(job))
+        if u.path == "/api/predictions":     # the run's progress + any saved predictions for one video
+            sid = (q.get("scene_id") or [""])[0]
+            return self.send(200, {"job": dict(pred_jobs.get(sid) or {"phase": "idle"}), **prediction_results(sid)})
+        if u.path == "/img":                 # image proxy: /img?u=https://i5.dt18.com/...
+            try:
+                body, ctype = fetch_image((q.get("u") or [""])[0])
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            except Exception as e:
+                return self.send(502, {"error": str(e)})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send(404, {"error": "not found"})
+
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        except ValueError:
+            return self.send(400, {"error": "bad request"})
+        if u.path == "/api/predict-images":  # run the model on a hand-picked set of images of one video
+            urls = [x for x in body.get("urls", []) if isinstance(x, str)][:2000]
+            if not urls:
+                return self.send(400, {"error": "no images selected"})
+            try:
+                job = start_predict(str(body.get("scene_id", "")), False, set(urls))
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, dict(job))
+        self.send(404, {"error": "not found"})
+
+    def log_message(self, *args):
+        pass
+
+
+if __name__ == "__main__":
+    print(f"data18 scraper dashboard: http://127.0.0.1:{PORT}")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

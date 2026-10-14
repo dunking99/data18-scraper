@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Tiny dashboard: type a performer name, see their videos with categories.   .venv/bin/python server.py  ->  http://127.0.0.1:8790"""
+import hashlib
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import requests
+
+import scraper
+
+HERE = Path(__file__).parent
+CACHE = HERE / "data" / "results"
+IMG_CACHE = HERE / "data" / "imgcache"
+PORT = 8790
+MAX_IMG_BYTES = 25 * 1024 * 1024
+
+scrape_lock = threading.Lock()   # one scrape at a time, keeps us polite to the site
+jobs = {}                        # slug -> job dict
+jobs_lock = threading.Lock()
+
+
+def save_result(result):
+    if not result["videos"]:     # never overwrite a good file with an empty result
+        return
+    CACHE.mkdir(parents=True, exist_ok=True)
+    result["total"] = len(result["videos"])
+    path = CACHE / f"{result['slug']}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1))
+    tmp.replace(path)
+
+
+def missing_details(result):
+    return sum(1 for v in result["videos"] if "categories" not in v or "galleries" not in v or "tags" not in v)
+
+
+def run_job(job, name, refresh):
+    """Background thread: listing (unless cached), then categories for any video that lacks them."""
+    try:
+        with scrape_lock:
+            slug = job["slug"]
+            cached = CACHE / f"{slug}.json"
+            if cached.exists() and not refresh:
+                result = json.loads(cached.read_text())
+                job["cached"] = True
+            else:
+                job["phase"] = "listing"
+                result = {"slug": slug, "total": 0, "videos": []}
+                job["result"] = result
+                listing = scraper.scrape_listing(
+                    name, progress=lambda page, n: job.update(listing_page=page, listing_count=n))
+                result.update(listing)
+                job["cached"] = False
+                save_result(result)
+            job["result"] = result
+            if result["videos"]:
+                scraper.apply_cached_details(result)
+                job["details_total"] = len(result["videos"])
+                job["details_done"] = job["details_total"] - missing_details(result)
+                if missing_details(result):
+                    job["phase"] = "details"
+
+                    def prog(done, total):
+                        job["details_done"], job["details_total"] = done, total
+                        if done % 25 == 0:
+                            save_result(result)
+                    scraper.enrich(result, scraper.load_session(), prog)
+                save_result(result)
+            job["phase"] = "done"
+    except scraper.SessionError as e:
+        job.update(phase="error", error=str(e), needs_setup=True)
+    except LookupError as e:
+        job.update(phase="error", error=str(e), status=404)
+    except Exception as e:
+        job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+def start_job(name, refresh):
+    slug = scraper.slugify(name)
+    if not slug:
+        raise ValueError("empty name")
+    with jobs_lock:
+        job = jobs.get(slug)
+        if job and job["phase"] in ("queued", "listing", "details"):
+            return job                       # already running: just follow it
+        job = {"slug": slug, "phase": "queued", "result": None, "error": None}
+        jobs[slug] = job
+    threading.Thread(target=run_job, args=(job, name, refresh), daemon=True).start()
+    return job
+
+
+_tag_index = {"key": None, "by_tag": {}}
+
+
+def tag_index():
+    """tag slug -> {scene_id: video} across every saved performer. Rebuilt only when a results file changes."""
+    files = sorted(CACHE.glob("*.json")) if CACHE.exists() else []
+    key = tuple((f.name, f.stat().st_mtime_ns) for f in files)
+    if _tag_index["key"] == key:
+        return _tag_index["by_tag"]
+    by_tag = {}
+    for f in files:
+        try:
+            result = json.loads(f.read_text())
+        except Exception:
+            continue
+        for v in result.get("videos", []):
+            for slug in v.get("tags", []):
+                rec = by_tag.setdefault(slug, {}).get(v["scene_id"])
+                if rec is None:
+                    rec = by_tag[slug][v["scene_id"]] = {
+                        "scene_id": v["scene_id"], "title": v["title"], "url": v["url"], "date": v.get("date", ""),
+                        "number": v.get("number", ""), "thumbnail": v.get("thumbnail", ""), "studio": v.get("studio", ""),
+                        "performers": v.get("performers", []), "scraped_from": []}
+                if result["slug"] not in rec["scraped_from"]:
+                    rec["scraped_from"].append(result["slug"])
+    _tag_index.update(key=key, by_tag=by_tag)
+    return by_tag
+
+
+studios_job = {"phase": "idle", "page": 0, "count": 0, "error": None}
+
+
+def run_studios_job():
+    try:
+        with scrape_lock:
+            scraper.scrape_studios(progress=lambda page, n: studios_job.update(page=page, count=n))
+        studios_job["phase"] = "done"
+    except scraper.SessionError as e:
+        studios_job.update(phase="error", error=str(e), needs_setup=True)
+    except Exception as e:
+        studios_job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+stars_job = {"phase": "idle", "page": 0, "count": 0, "error": None, "started": 0}
+
+
+def run_stars_job():
+    try:
+        with scrape_lock:
+            scraper.scrape_pornstars(progress=lambda page, n: stars_job.update(page=page, count=n))
+        stars_job["phase"] = "done"
+    except scraper.SessionError as e:
+        stars_job.update(phase="error", error=str(e), needs_setup=True)
+    except Exception as e:
+        stars_job.update(phase="error", error=f"{type(e).__name__}: {e}")
+
+
+def snapshot(job):
+    result = job["result"]
+    out = {k: v for k, v in job.items() if k != "result"}
+    out["videos"] = list(result["videos"]) if result else []
+    out["total"] = len(out["videos"])
+    return out
+
+
+def fetch_image(url):
+    """(bytes, content_type) for an image on a *.dt18.com host. The image servers refuse requests that don't
+    come from data18 itself, so the server adds that referrer and keeps a copy on disk."""
+    u = urlparse(url)
+    if u.scheme != "https" or not (u.hostname or "").endswith(".dt18.com"):
+        raise ValueError("only https://*.dt18.com images are served")
+    key = hashlib.sha1(url.encode()).hexdigest()
+    IMG_CACHE.mkdir(parents=True, exist_ok=True)
+    cached = next(iter(IMG_CACHE.glob(key + ".*")), None)
+    if cached:
+        return cached.read_bytes(), "image/" + cached.suffix.lstrip(".")
+    r = requests.get(url, timeout=25, headers={"Referer": "https://www.data18.com/", "User-Agent": scraper.DEFAULT_UA})
+    ctype = r.headers.get("Content-Type", "").split(";")[0]
+    if r.status_code != 200 or not ctype.startswith("image/") or len(r.content) > MAX_IMG_BYTES:
+        raise LookupError(f"image unavailable ({r.status_code})")
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(ctype, "img")
+    tmp = IMG_CACHE / f"{key}.tmp{threading.get_ident()}"
+    tmp.write_bytes(r.content)
+    tmp.replace(IMG_CACHE / f"{key}.{ext}")
+    return r.content, ctype
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        if u.path == "/":
+            return self.send(200, (HERE / "static" / "index.html").read_bytes(), "text/html")
+        if u.path == "/api/status":
+            saved = sorted(p.stem for p in CACHE.glob("*.json")) if CACHE.exists() else []
+            return self.send(200, {"session": scraper.SESSION_FILE.exists(), "saved": saved})
+        if u.path == "/api/scrape":          # start (or follow) a job
+            try:
+                job = start_job((q.get("name") or [""])[0], q.get("refresh") == ["1"])
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            return self.send(200, {"slug": job["slug"]})
+        if u.path == "/api/job":             # poll a job
+            slug = (q.get("slug") or [""])[0]
+            job = jobs.get(slug)
+            if not job:
+                return self.send(404, {"error": "no such job"})
+            return self.send(200, snapshot(job))
+        if u.path == "/api/studios":         # saved studio list
+            return self.send(200, scraper.load_studios() or {"studios": [], "total": 0, "scraped_at": None})
+        if u.path == "/api/studios/refresh":  # re-scrape the list from data18 in the background
+            with jobs_lock:
+                if studios_job["phase"] != "running":
+                    studios_job.update(phase="running", page=0, count=0, error=None, needs_setup=False)
+                    threading.Thread(target=run_studios_job, daemon=True).start()
+            return self.send(200, dict(studios_job))
+        if u.path == "/api/studios/job":
+            return self.send(200, dict(studios_job))
+        if u.path == "/api/tags":            # the tag list, with how many scraped videos each one has
+            data = scraper.load_tags() or {"tags": [], "total": 0, "scraped_at": None}
+            idx = tag_index()
+            known = {t["slug"] for t in data["tags"]}
+            return self.send(200, {**data,
+                                   "tags": [{**t, "videos": len(idx.get(t["slug"], {}))} for t in data["tags"]],
+                                   "unlisted": sorted(sl for sl in idx if sl not in known)})
+        if u.path == "/api/tag-videos":      # the scraped videos that have one tag
+            vids = list(tag_index().get((q.get("slug") or [""])[0], {}).values())
+            vids.sort(key=lambda v: int(v["scene_id"]), reverse=True)
+            return self.send(200, {"videos": vids})
+        if u.path == "/api/pornstars":       # compact rows: [slug, name, picture, scenes, movies, rank]
+            d = scraper.load_pornstars()
+            if not d:
+                return self.send(200, {"stars": [], "total": 0, "scraped_at": None})
+            return self.send(200, {"total": d["total"], "scraped_at": d["scraped_at"],
+                                   "stars": [[x["slug"], x["name"], x["picture"], x["scenes"], x["movies"], x["rank"]] for x in d["stars"]]})
+        if u.path == "/api/pornstars/refresh":
+            with jobs_lock:
+                if stars_job["phase"] != "running":
+                    stars_job.update(phase="running", page=0, count=0, error=None, needs_setup=False, started=time.time())
+                    threading.Thread(target=run_stars_job, daemon=True).start()
+            return self.send(200, dict(stars_job))
+        if u.path == "/api/pornstars/job":
+            return self.send(200, dict(stars_job))
+        if u.path == "/api/photos":          # galleries (with image addresses) for one video
+            galleries = scraper.scene_galleries((q.get("scene_id") or [""])[0])
+            if galleries is None:
+                return self.send(404, {"error": "photos not fetched yet"})
+            return self.send(200, {"galleries": galleries})
+        if u.path == "/img":                 # image proxy: /img?u=https://i5.dt18.com/...
+            try:
+                body, ctype = fetch_image((q.get("u") or [""])[0])
+            except ValueError as e:
+                return self.send(400, {"error": str(e)})
+            except Exception as e:
+                return self.send(502, {"error": str(e)})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send(404, {"error": "not found"})
+
+    def log_message(self, *args):
+        pass
+
+
+if __name__ == "__main__":
+    print(f"data18 scraper dashboard: http://127.0.0.1:{PORT}")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

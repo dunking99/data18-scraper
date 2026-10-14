@@ -1,0 +1,85 @@
+{
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+  "cookies": [
+    {
+      "name": "data_user_navigation",
+      "value": "1",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "agvf_verif",
+      "value": "1",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": 1792952433.17993,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_captcha",
+      "value": "1",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": 1792952439.392107,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_enter",
+      "value": "UNK-en-1",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": 1791825639.414947,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_functions",
+      "value": "0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0-0",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": 1799518839.414998,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_nav_custom",
+      "value": "t%3D2%26b%3D1%26html%3Dkyler-quinn",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_nav_pornstar",
+      "value": "90185",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "data_user_nav_media",
+      "value": "3-90185",
+      "domain": ".data18.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ]
+}

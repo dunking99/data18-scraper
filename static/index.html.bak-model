@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>data18 scraper</title>
+<style>
+  :root { --bg:#f6f6f4; --fg:#1c1c1a; --muted:#6b6b66; --card:#fff; --line:#dcdcd6; --accent:#2b5fd9; --err:#b3261e;
+          --inc:#1d7a3a; --inc-bg:#d9f2e0; --exc:#b3261e; --exc-bg:#fadcd9;
+          --cat-s:60%; --cat-l:88%; --cat-t:28%; --eth-s:75%; --eth-l:86%; --eth-t:30%; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --fg:#ececea; --muted:#9a9a94; --card:#1f1f1d; --line:#35352f; --accent:#7ba3ff; --err:#ff8a80;
+            --inc:#7fd99a; --inc-bg:#1d3a27; --exc:#ff9a90; --exc-bg:#43211e;
+            --cat-s:35%; --cat-l:24%; --cat-t:82%; --eth-s:45%; --eth-l:25%; --eth-t:84%; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  form { display:flex; gap:8px; }
+  input[type=text], select { padding:10px 12px; font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  form input[type=text] { flex:1; }
+  button { padding:10px 16px; font:inherit; color:#fff; background:var(--accent); border:0; border-radius:8px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:none; color:var(--accent); border:1px solid var(--line); padding:6px 10px; font-size:13px; }
+  button.ghost.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #status { margin:14px 0 6px; color:var(--muted); min-height:1.4em; }
+  #status.err { color:var(--err); }
+  #prog { height:4px; background:var(--line); border-radius:2px; overflow:hidden; margin-bottom:10px; }
+  #prog > div { height:100%; width:0; background:var(--accent); transition:width .3s; }
+
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin:12px 0; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .row + .row, .group + .group { margin-top:10px; }
+  .row select, .row input[type=text] { padding:6px 8px; font-size:13px; }
+  .row input[type=text] { flex:1; min-width:160px; }
+  .group h3 { margin:0 0 6px; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  .hint { font-weight:400; text-transform:none; letter-spacing:0; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; }
+
+  .chip { --h:220; display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:6px; border:1px solid transparent;
+          font-size:12.5px; line-height:1.5; cursor:pointer; user-select:none; font-family:inherit;
+          background:hsl(var(--h) var(--cat-s) var(--cat-l)); color:hsl(var(--h) 45% var(--cat-t)); }
+  .chip.eth { background:hsl(var(--h) var(--eth-s) var(--eth-l)); color:hsl(var(--h) 55% var(--eth-t)); }
+  .chip .n { opacity:.65; font-variant-numeric:tabular-nums; }
+  .chip.inc { background:var(--inc-bg); color:var(--inc); border-color:var(--inc); font-weight:600; }
+  .chip.exc { background:var(--exc-bg); color:var(--exc); border-color:var(--exc); text-decoration:line-through; }
+  .chip.inc::before { content:"+"; } .chip.exc::before { content:"−"; text-decoration:none; }
+
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:12px; align-items:flex-start; padding:10px; margin-bottom:8px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  li img { width:96px; height:54px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
+  .num { color:var(--muted); font-variant-numeric:tabular-nums; min-width:3.2em; padding-top:1px; }
+  .main { min-width:0; flex:1; }
+  .main a { color:var(--fg); font-weight:600; text-decoration:none; }
+  .main a:hover { color:var(--accent); text-decoration:underline; }
+  .meta { color:var(--muted); font-size:13px; }
+  li .chips { margin-top:6px; }
+  .more { margin-top:6px; }
+  .tabs { display:flex; gap:4px; margin:-6px 0 16px; border-bottom:1px solid var(--line); }
+  .tabs button { background:none; color:var(--muted); border-radius:8px 8px 0 0; padding:8px 14px; border-bottom:2px solid transparent; }
+  .tabs button[aria-selected=true] { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
+  #pg-studios .srow { display:flex; align-items:baseline; gap:10px; padding:8px 10px; margin-bottom:4px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  #pg-studios .srow.child { margin-left:22px; border-left:3px solid var(--accent); }
+  #pg-studios .srow .nm { flex:1; min-width:0; font-weight:600; color:var(--fg); text-decoration:none; overflow-wrap:anywhere; }
+  #pg-studios .srow .nm:hover { color:var(--accent); text-decoration:underline; }
+  #pg-studios .srow.parentrow .nm { font-weight:700; }
+  #pg-studios .srow .cnt { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:13px; }
+  #pg-studios .srow .slug { color:var(--muted); font-size:12px; }
+  #pg-studios .via { font-size:12px; }
+  #pg-studios .pill { color:var(--muted); font-size:12px; padding:0 6px; border:1px solid var(--line); border-radius:10px; }
+  #pg-tags .trow { background:var(--card); border:1px solid var(--line); border-radius:8px; margin-bottom:4px; }
+  #pg-tags .thead { display:flex; align-items:baseline; gap:10px; width:100%; padding:8px 10px; background:none; color:var(--fg); border:0; border-radius:8px; text-align:left; }
+  #pg-tags .thead .arrow { display:inline-block; width:1em; color:var(--muted); transition:transform .15s; }
+  #pg-tags .thead[aria-expanded=true] .arrow { transform:rotate(90deg); }
+  #pg-tags .thead .nm { flex:1; font-weight:600; }
+  #pg-tags .thead .cnt { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+  #pg-tags .trow.empty .nm { font-weight:400; color:var(--muted); }
+  #pg-tags .tlink { color:var(--muted); font-size:12px; text-decoration:none; padding-right:4px; }
+  #pg-tags .tlink:hover { color:var(--accent); }
+  #pg-tags .tvids { padding:2px 10px 10px; }
+  #pg-tags .tv { display:flex; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  #pg-tags .tv img { width:80px; height:45px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
+  #pg-tags .tv a { color:var(--fg); font-weight:600; text-decoration:none; }
+  #pg-tags .tv a:hover { color:var(--accent); text-decoration:underline; }
+  #p-grid { display:grid; gap:10px; grid-template-columns:repeat(auto-fill, minmax(132px, 1fr)); }
+  .pcard { display:block; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; text-decoration:none; color:var(--fg); }
+  .pcard:hover { border-color:var(--accent); }
+  .pcard .pic { aspect-ratio:1; width:100%; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--muted); font-size:28px; font-weight:600; }
+  .pcard .pic img { width:100%; height:100%; object-fit:cover; display:block; }
+  .pcard .pn { padding:6px 8px 0; font-size:13px; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
+  .pcard .ps { padding:0 8px 7px; font-size:12px; color:var(--muted); }
+  li { flex-wrap:wrap; }
+  li > img { cursor:default; }
+  .pbtn { margin-top:6px; display:inline-flex; align-items:center; gap:6px; }
+  .pbtn .arrow { display:inline-block; transition:transform .15s; }
+  .pbtn[aria-expanded=true] .arrow { transform:rotate(90deg); }
+  .pbtn .sum { color:var(--muted); font-size:12px; }
+  .nophotos { margin-top:6px; color:var(--muted); font-size:12.5px; }
+  .gal { flex-basis:100%; margin-top:8px; border-top:1px solid var(--line); padding-top:10px; }
+  .gal h4 { margin:12px 0 6px; font-size:13px; }
+  .gal h4:first-child { margin-top:0; }
+  .gal h4 .n { color:var(--muted); font-weight:400; }
+  .grid { display:grid; gap:8px; grid-template-columns:repeat(auto-fill, minmax(max(170px, calc((100% - 32px) / 5)), 1fr)); }
+  .grid .ph { display:block; aspect-ratio:4/3; background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; padding:0; cursor:zoom-in; }
+  .grid .ph img { width:100%; height:100%; object-fit:contain; display:block; }
+  #lb { position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.92); display:none; align-items:center; justify-content:center; }
+  #lb.open { display:flex; }
+  #lb img { max-width:94vw; max-height:90vh; object-fit:contain; }
+  #lb .cap { position:fixed; bottom:10px; left:0; right:0; text-align:center; color:#ddd; font-size:13px; }
+  #lb button { position:fixed; background:rgba(255,255,255,.12); color:#fff; padding:10px 14px; font-size:20px; border-radius:8px; }
+  #lb .x { top:12px; right:12px; } #lb .prev { left:12px; top:50%; } #lb .next { right:12px; top:50%; }
+  @media (max-width:560px) { li > img { width:72px; height:40px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>data18 scraper</h1>
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-perf" aria-selected="true">Performers</button>
+    <button type="button" role="tab" id="tab-studios" aria-selected="false">Studios</button>
+    <button type="button" role="tab" id="tab-tags" aria-selected="false">Tags</button>
+    <button type="button" role="tab" id="tab-stars" aria-selected="false">Pornstars</button>
+  </nav>
+  <div id="pg-perf">
+  <form id="f">
+    <input type="text" id="name" list="saved" placeholder="Performer name, e.g. Kyler Quinn" autofocus autocomplete="off">
+    <datalist id="saved"></datalist>
+    <button id="go">Scrape</button>
+  </form>
+  <div id="status"></div>
+  <div id="prog" hidden><div></div></div>
+
+  <div id="results" hidden>
+    <div class="panel" id="filters">
+      <div class="row">
+        <strong id="count"></strong>
+        <input type="text" id="filter" placeholder="Search titles...">
+        <button class="ghost" id="clear" type="button">Clear filters</button>
+        <button class="ghost" id="copy" type="button">Copy links</button>
+        <button class="ghost" id="refresh" type="button">Re-scrape</button>
+      </div>
+      <div class="row">
+        <select id="studio"></select>
+        <select id="costar"></select>
+        <select id="year"></select>
+        <select id="sort">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+          <option value="az">Title A–Z</option>
+        </select>
+      </div>
+      <div class="group">
+        <h3>Categories <span class="hint">click once to require, twice to exclude</span>
+          <button class="ghost" id="mode" type="button" title="Whether a video needs all the required categories or any one of them">match: all</button></h3>
+        <div class="chips" id="catchips"></div>
+        <button class="ghost more" id="catmore" type="button" hidden></button>
+      </div>
+      <div class="group">
+        <h3>Ethnicity</h3>
+        <div class="chips" id="ethchips"></div>
+      </div>
+    </div>
+    <ul id="list"></ul>
+  </div>
+  </div><!-- /pg-perf -->
+
+  <div id="pg-studios" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="s-count"></strong>
+        <input type="text" id="s-q" placeholder="Search studios..." autocomplete="off">
+        <button class="ghost" id="s-refresh" type="button">Re-scrape from data18</button>
+      </div>
+      <div class="row">
+        <select id="s-type">
+          <option value="all">All studios</option>
+          <option value="top">Top-level only</option>
+          <option value="sub">Sub-channels only</option>
+        </select>
+        <select id="s-parent"></select>
+        <select id="s-sort">
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+          <option value="most">Most scenes</option>
+          <option value="least">Fewest scenes</option>
+        </select>
+        <button class="ghost" id="s-group" type="button" title="Show each sub-channel under its parent channel">Group by channel</button>
+        <button class="ghost" id="s-copy" type="button">Copy links</button>
+      </div>
+      <div id="s-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="s-list"></div>
+  </div>
+
+  <div id="pg-tags" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="t-count"></strong>
+        <input type="text" id="t-q" placeholder="Search tags..." autocomplete="off">
+        <select id="t-sort">
+          <option value="az">A–Z</option>
+          <option value="most">Most videos</option>
+        </select>
+        <button class="ghost" id="t-only" type="button" title="Hide tags none of your scraped videos have">Only tags with videos</button>
+      </div>
+      <div id="t-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="t-list"></div>
+  </div>
+  <div id="pg-stars" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="p-count"></strong>
+        <input type="text" id="p-q" placeholder="Search pornstars..." autocomplete="off">
+        <select id="p-sort">
+          <option value="site">Newest activity</option>
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+          <option value="most">Most scenes</option>
+        </select>
+        <button class="ghost" id="p-pics" type="button" title="Hide performers data18 has no photo for">Only with photos</button>
+        <button class="ghost" id="p-refresh" type="button">Re-scrape from data18</button>
+      </div>
+      <div id="p-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="p-grid"></div>
+    <div id="p-more" class="meta" style="text-align:center;padding:16px;cursor:pointer" title="Click to load more"></div>
+  </div>
+</main>
+<div id="lb" aria-hidden="true">
+  <button class="x" type="button" aria-label="Close">✕</button>
+  <button class="prev" type="button" aria-label="Previous">‹</button>
+  <img alt="">
+  <button class="next" type="button" aria-label="Next">›</button>
+  <div class="cap"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let data = null, pollTimer = null, lastSig = "";
+const CAT_LIMIT = 30;
+// filter state: tag -> "inc" | "exc"
+const F = { cats:new Map(), eths:new Map(), anyMode:false, showAllCats:false };
+
+function setStatus(msg, err) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+function setProgress(frac) { $("prog").hidden = frac == null; if (frac != null) $("prog").firstElementChild.style.width = Math.round(frac * 100) + "%"; }
+
+// stable hue from a string; categories cool (180-300), ethnicity warm (10-60)
+function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; }
+const catHue = s => 180 + hash(s) % 120;
+const ethHue = s => 10 + hash(s) % 50;
+
+function chip(label, {eth=false, state="", count=null, onclick=null}={}) {
+  const b = document.createElement(onclick ? "button" : "span");
+  if (onclick) { b.type = "button"; b.addEventListener("click", onclick); }
+  b.className = "chip" + (eth ? " eth" : "") + (state ? " " + state : "");
+  b.style.setProperty("--h", eth ? ethHue(label) : catHue(label));
+  b.textContent = label;
+  if (count != null) { const n = document.createElement("span"); n.className = "n"; n.textContent = count; b.append(n); }
+  return b;
+}
+
+function year(v) { const m = /\b(19|20)\d{2}\b/.exec(v.date || ""); return m ? m[0] : ""; }
+function counts(vids, key) {
+  const c = new Map();
+  for (const v of vids) for (const t of v[key] || []) c.set(t, (c.get(t) || 0) + 1);
+  return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function passes(v, ignore) {
+  const q = $("filter").value.toLowerCase();
+  if (q && !v.title.toLowerCase().includes(q)) return false;
+  if (ignore !== "studio" && $("studio").value && v.studio !== $("studio").value) return false;
+  if (ignore !== "costar" && $("costar").value && !v.performers.includes($("costar").value)) return false;
+  if (ignore !== "year" && $("year").value && year(v) !== $("year").value) return false;
+  for (const [map, key] of [[F.cats, "categories"], [F.eths, "ethnicity"]]) {
+    const have = v[key];
+    const inc = [...map].filter(([, s]) => s === "inc").map(([t]) => t);
+    const exc = [...map].filter(([, s]) => s === "exc").map(([t]) => t);
+    if (inc.length || exc.length) {
+      if (!have) return false;                    // details not fetched yet
+      if (exc.some(t => have.includes(t))) return false;
+      if (inc.length && !(F.anyMode ? inc.some(t => have.includes(t)) : inc.every(t => have.includes(t)))) return false;
+    }
+  }
+  return true;
+}
+
+function fillSelect(sel, firstLabel, values) {
+  const cur = sel.value;
+  sel.replaceChildren(new Option(firstLabel, ""), ...values.map(([v, n]) => new Option(`${v} (${n})`, v)));
+  if (values.some(([v]) => v === cur)) sel.value = cur;
+}
+
+function cycle(map, tag) {
+  const s = map.get(tag);
+  if (!s) map.set(tag, "inc"); else if (s === "inc") map.set(tag, "exc"); else map.delete(tag);
+  render();
+}
+
+function renderFilters() {
+  const all = data.videos;
+  fillSelect($("studio"), "Any studio", counts(all.map(v => ({s: v.studio ? [v.studio] : []})), "s"));
+  fillSelect($("costar"), "Anyone", counts(all, "performers"));
+  fillSelect($("year"), "Any year", counts(all.map(v => ({y: year(v) ? [year(v)] : []})), "y").sort((a, b) => b[0].localeCompare(a[0])));
+  const cats = counts(all, "categories"), eths = counts(all, "ethnicity");
+  // keep selected chips visible even when they'd fall outside the top list
+  let shown = F.showAllCats ? cats : cats.slice(0, CAT_LIMIT);
+  for (const [t] of F.cats) if (!shown.some(([x]) => x === t)) shown = shown.concat([[t, cats.find(([x]) => x === t)?.[1] ?? 0]]);
+  $("catchips").replaceChildren(...shown.map(([t, n]) => chip(t, {state:F.cats.get(t) || "", count:n, onclick:() => cycle(F.cats, t)})));
+  $("catmore").hidden = cats.length <= CAT_LIMIT;
+  $("catmore").textContent = F.showAllCats ? "Show fewer" : `Show all ${cats.length} categories`;
+  $("ethchips").replaceChildren(...eths.map(([t, n]) => chip(t, {eth:true, state:F.eths.get(t) || "", count:n, onclick:() => cycle(F.eths, t)})));
+  if (!cats.length && !eths.length) $("catchips").textContent = "Categories are still loading...";
+}
+
+function render() {
+  if (!data) return;
+  renderFilters();
+  const sort = $("sort").value;
+  let vids = data.videos.filter(v => passes(v));
+  if (sort === "old") vids = vids.slice().sort((a, b) => Number(a.number) - Number(b.number));
+  else if (sort === "az") vids = vids.slice().sort((a, b) => a.title.localeCompare(b.title));
+  else vids = vids.slice().sort((a, b) => Number(b.number) - Number(a.number));
+  $("count").textContent = `${vids.length}${vids.length !== data.videos.length ? " / " + data.videos.length : ""} videos`;
+  $("list").replaceChildren(...vids.map(rowFor));
+}
+
+// ---- rows (cached so an expanded photo panel survives the refreshes while details load)
+const rowCache = new Map();   // scene_id -> {sig, li}
+const panels = new Map();     // scene_id -> {panel, btn}   (only for expanded rows)
+const photoData = new Map();  // scene_id -> galleries
+
+function rowSig(v) {
+  const st = t => (F.cats.get(t) || F.eths.get(t) || "");
+  return JSON.stringify([v.categories, v.ethnicity, v.galleries, (v.categories || []).map(st), (v.ethnicity || []).map(st)]);
+}
+function rowFor(v) {
+  const sig = rowSig(v), hit = rowCache.get(v.scene_id);
+  if (hit && hit.sig === sig) return hit.li;
+  const li = buildRow(v);
+  rowCache.set(v.scene_id, {sig, li});
+  return li;
+}
+
+function buildRow(v) {
+  const li = document.createElement("li");
+  const img = document.createElement("img"); img.src = v.thumbnail; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+  const num = document.createElement("span"); num.className = "num"; num.textContent = v.number ? "#" + v.number : "";
+  const main = document.createElement("div"); main.className = "main";
+  const a = document.createElement("a"); a.href = v.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = v.title;
+  const meta = document.createElement("div"); meta.className = "meta";
+  meta.textContent = [v.date, v.studio, v.performers.length ? "With " + v.performers.join(", ") : ""].filter(Boolean).join(" · ");
+  main.append(a, meta);
+  if ((v.categories && v.categories.length) || (v.ethnicity && v.ethnicity.length)) {
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const t of v.categories || []) chips.append(chip(t, {state:F.cats.get(t) || "", onclick:() => cycle(F.cats, t)}));
+    for (const t of v.ethnicity || []) chips.append(chip(t, {eth:true, state:F.eths.get(t) || "", onclick:() => cycle(F.eths, t)}));
+    main.append(chips);
+  }
+  if (v.galleries && v.galleries.length) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "ghost pbtn"; btn.setAttribute("aria-expanded", "false");
+    const arrow = document.createElement("span"); arrow.className = "arrow"; arrow.textContent = "▸";
+    const sum = document.createElement("span"); sum.className = "sum";
+    sum.textContent = v.galleries.map(g => `${g.label} ${g.count}`).join(" · ");
+    btn.append(arrow, document.createTextNode("Photos"), sum);
+    btn.addEventListener("click", () => togglePhotos(v, li, btn));
+    main.append(btn);
+  } else if (v.galleries) {
+    const n = document.createElement("div"); n.className = "nophotos"; n.textContent = "No photos";
+    main.append(n);
+  }
+  li.append(img, num, main);
+  const open = panels.get(v.scene_id);          // rebuilt while expanded: put the open panel back
+  if (open) { li.append(open.panel); open.btn = main.querySelector(".pbtn"); open.btn?.setAttribute("aria-expanded", "true"); }
+  return li;
+}
+
+async function togglePhotos(v, li, btn) {
+  const id = v.scene_id, open = panels.get(id);
+  if (open) { open.panel.remove(); panels.delete(id); btn.setAttribute("aria-expanded", "false"); return; }
+  const panel = document.createElement("div"); panel.className = "gal"; panel.textContent = "Loading photos...";
+  panels.set(id, {panel, btn}); btn.setAttribute("aria-expanded", "true"); li.append(panel);
+  try {
+    if (!photoData.has(id)) {
+      const r = await fetch("/api/photos?scene_id=" + encodeURIComponent(id));
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+      photoData.set(id, (await r.json()).galleries);
+    }
+    panel.replaceChildren(...photoSections(photoData.get(id)));
+  } catch (e) { panel.textContent = "Couldn't load photos: " + e.message; }
+}
+
+const proxy = url => "/img?u=" + encodeURIComponent(url);
+function photoSections(galleries) {
+  const out = [];
+  for (const g of galleries) {
+    const h = document.createElement("h4");
+    h.textContent = g.label + " ";
+    const n = document.createElement("span"); n.className = "n"; n.textContent = `(${g.images.length})`; h.append(n);
+    const grid = document.createElement("div"); grid.className = "grid";
+    g.images.forEach((im, i) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "ph";
+      const img = document.createElement("img"); img.loading = "lazy"; img.decoding = "async"; img.alt = `${g.label} ${i + 1}`; img.src = proxy(im.f);
+      b.append(img); b.addEventListener("click", () => openLightbox(g, i));
+      grid.append(b);
+    });
+    out.push(h, g.images.length ? grid : Object.assign(document.createElement("div"), {className:"meta", textContent:"No images"}));
+  }
+  return out;
+}
+
+// ---- lightbox
+const lb = { g:null, i:0 };
+function lbShow() {
+  const im = lb.g.images[lb.i];
+  $("lb").querySelector("img").src = proxy(im.f);
+  $("lb").querySelector(".cap").textContent = `${lb.g.label} · ${lb.i + 1} / ${lb.g.images.length}`;
+}
+function openLightbox(g, i) { lb.g = g; lb.i = i; $("lb").classList.add("open"); lbShow(); }
+function lbStep(d) { if (lb.g) { lb.i = (lb.i + d + lb.g.images.length) % lb.g.images.length; lbShow(); } }
+function lbClose() { $("lb").classList.remove("open"); $("lb").querySelector("img").removeAttribute("src"); lb.g = null; }
+$("lb").querySelector(".x").addEventListener("click", lbClose);
+$("lb").querySelector(".prev").addEventListener("click", e => { e.stopPropagation(); lbStep(-1); });
+$("lb").querySelector(".next").addEventListener("click", e => { e.stopPropagation(); lbStep(1); });
+$("lb").addEventListener("click", e => { if (e.target === $("lb")) lbClose(); });
+document.addEventListener("keydown", e => {
+  if (!lb.g) return;
+  if (e.key === "Escape") lbClose(); else if (e.key === "ArrowLeft") lbStep(-1); else if (e.key === "ArrowRight") lbStep(1);
+});
+
+async function poll(slug) {
+  clearTimeout(pollTimer);
+  try {
+    const r = await fetch("/api/job?slug=" + encodeURIComponent(slug));
+    const j = await r.json();
+    if (!r.ok) { setStatus(j.error, true); $("go").disabled = false; return; }
+    if (j.phase === "error") {
+      setStatus(j.error + (j.needs_setup ? "  (then reload this page)" : ""), true);
+      setProgress(null); $("go").disabled = false; return;
+    }
+    const sig = j.phase + j.total + (j.details_done || 0);
+    if (sig !== lastSig) {
+      lastSig = sig;
+      data = j;
+      $("results").hidden = !j.total;
+      render();
+    }
+    if (j.phase === "queued" || j.phase === "listing") {
+      setStatus(`Fetching video list... ${j.listing_count || 0} videos so far (page ${j.listing_page || 0})`);
+      setProgress(null);
+    } else if (j.phase === "details") {
+      setStatus(`${j.slug}: fetching categories ${j.details_done}/${j.details_total}. You can already browse and filter.`);
+      setProgress(j.details_done / j.details_total);
+    } else {
+      setStatus(j.total ? `${j.slug}${j.cached ? " (saved copy)" : ""}` : `${j.slug}: no videos found`, !j.total);
+      setProgress(null); $("go").disabled = false; return;
+    }
+    pollTimer = setTimeout(() => poll(slug), 1000);
+  } catch (e) { setStatus("Request failed: " + e.message, true); $("go").disabled = false; }
+}
+
+async function run(refresh) {
+  const name = $("name").value.trim();
+  if (!name) return;
+  $("go").disabled = true; $("results").hidden = true; data = null; lastSig = "";
+  F.cats.clear(); F.eths.clear(); rowCache.clear(); panels.clear(); photoData.clear();
+  setStatus("Starting..."); setProgress(null);
+  try {
+    const r = await fetch(`/api/scrape?name=${encodeURIComponent(name)}${refresh ? "&refresh=1" : ""}`);
+    const j = await r.json();
+    if (!r.ok) { setStatus(j.error, true); $("go").disabled = false; return; }
+    poll(j.slug);
+  } catch (e) { setStatus("Request failed: " + e.message, true); $("go").disabled = false; }
+}
+
+$("f").addEventListener("submit", e => { e.preventDefault(); run(false); });
+$("refresh").addEventListener("click", () => run(true));
+for (const id of ["filter", "studio", "costar", "year", "sort"]) $(id).addEventListener("input", render);
+$("mode").addEventListener("click", () => { F.anyMode = !F.anyMode; $("mode").textContent = "match: " + (F.anyMode ? "any" : "all"); $("mode").classList.toggle("on", F.anyMode); render(); });
+$("catmore").addEventListener("click", () => { F.showAllCats = !F.showAllCats; render(); });
+$("clear").addEventListener("click", () => {
+  F.cats.clear(); F.eths.clear(); $("filter").value = "";
+  for (const id of ["studio", "costar", "year"]) $(id).value = "";
+  render();
+});
+$("copy").addEventListener("click", async () => {
+  const urls = data.videos.filter(v => passes(v)).map(v => v.url).join("\n");
+  await navigator.clipboard.writeText(urls);
+  $("copy").textContent = "Copied"; setTimeout(() => $("copy").textContent = "Copy links", 1200);
+});
+fetch("/api/status").then(r => r.json()).then(s => {
+  $("saved").replaceChildren(...s.saved.map(x => new Option(x.replace(/-/g, " "))));
+  if (!s.session) setStatus("No saved session yet. Run  .venv/bin/python setup_session.py  once, then reload.", true);
+});
+
+// ================= Studios tab =================
+const S = { all:[], loaded:false, group:false };
+
+function showTab(name) {
+  for (const t of ["perf", "studios", "tags", "stars"]) {
+    $("pg-" + t).hidden = t !== name;
+    $("tab-" + t).setAttribute("aria-selected", String(t === name));
+  }
+  try { history.replaceState(null, "", name === "perf" ? location.pathname : "#" + name); } catch (e) {}
+  if (name === "studios" && !S.loaded) loadStudios();
+  if (name === "tags") loadTags();
+  if (name === "stars" && !P.loaded) loadStars();
+}
+$("tab-perf").addEventListener("click", () => showTab("perf"));
+$("tab-studios").addEventListener("click", () => showTab("studios"));
+$("tab-tags").addEventListener("click", () => showTab("tags"));
+$("tab-stars").addEventListener("click", () => showTab("stars"));
+
+async function loadStudios() {
+  const d = await (await fetch("/api/studios")).json();
+  S.all = d.studios; S.loaded = true; S.scraped = d.scraped_at;
+  const parents = new Map();
+  for (const s of S.all) if (s.parent) parents.set(s.parent, (parents.get(s.parent) || 0) + 1);
+  const opts = [...parents].map(([slug, n]) => [slug, S.all.find(x => x.slug === slug)?.name || slug, n]).sort((a, b) => a[1].localeCompare(b[1]));
+  $("s-parent").replaceChildren(new Option("Any channel", ""), ...opts.map(([slug, name, n]) => new Option(`${name} (${n} sub-channels)`, slug)));
+  renderStudios();
+}
+
+function renderStudios() {
+  const q = $("s-q").value.trim().toLowerCase(), type = $("s-type").value, parent = $("s-parent").value, sort = $("s-sort").value;
+  let rows = S.all.filter(s =>
+    (!q || s.name.toLowerCase().includes(q) || s.slug.includes(q) || (s.parent_name || "").toLowerCase().includes(q)) &&
+    (type === "all" || (type === "top" ? !s.parent : !!s.parent)) &&
+    (!parent || s.parent === parent || s.slug === parent));
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, {sensitivity:"base", numeric:true});
+  const cmp = { az:byName, za:(a, b) => byName(b, a), most:(a, b) => b.scenes - a.scenes || byName(a, b), least:(a, b) => a.scenes - b.scenes || byName(a, b) }[sort];
+  if (S.group) {
+    // children sit under their parent; groups follow the chosen sort, using the parent's figures
+    const key = s => s.parent || s.slug;
+    const head = new Map(S.all.filter(s => !s.parent).map(s => [s.slug, s]));
+    const groups = new Map();
+    for (const s of rows) { const k = key(s); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
+    const order = [...groups].sort(([ka], [kb]) => cmp(head.get(ka) || groups.get(ka)[0], head.get(kb) || groups.get(kb)[0]));
+    rows = order.flatMap(([, items]) => items.sort((a, b) => (a.parent ? 1 : 0) - (b.parent ? 1 : 0) || cmp(a, b)));
+  } else rows.sort(cmp);
+
+  const total = S.all.length, subs = S.all.filter(s => s.parent).length;
+  $("s-count").textContent = rows.length === total ? `${total} studios` : `${rows.length} / ${total} studios`;
+  $("s-info").textContent = total ? `${total - subs} top-level · ${subs} sub-channels · last scraped ${S.scraped || "never"}` : "No studios saved yet. Click \"Re-scrape from data18\".";
+  $("s-group").classList.toggle("on", S.group);
+
+  const frag = document.createDocumentFragment();
+  for (const s of rows) {
+    const row = document.createElement("div");
+    row.className = "srow" + (S.group && s.parent ? " child" : "") + (S.group && !s.parent ? " parentrow" : "");
+    const a = document.createElement("a"); a.className = "nm"; a.href = s.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = s.name;
+    row.append(a);
+    if (s.parent && !S.group) {
+      const via = document.createElement("button"); via.type = "button"; via.className = "chip via"; via.style.setProperty("--h", catHue(s.parent));
+      via.textContent = "↳ " + s.parent_name; via.title = "Show only this channel's sub-channels";
+      via.addEventListener("click", () => { $("s-parent").value = s.parent; renderStudios(); });
+      row.append(via);
+    }
+    const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = s.scenes.toLocaleString() + " scenes";
+    row.append(cnt);
+    frag.append(row);
+  }
+  $("s-list").replaceChildren(frag);
+}
+
+for (const id of ["s-q", "s-type", "s-parent", "s-sort"]) $(id).addEventListener("input", renderStudios);
+$("s-group").addEventListener("click", () => { S.group = !S.group; renderStudios(); });
+$("s-copy").addEventListener("click", async () => {
+  const q = $("s-q").value.trim().toLowerCase();
+  const urls = [...document.querySelectorAll("#s-list a.nm")].map(a => a.href).join("\n");
+  await navigator.clipboard.writeText(urls);
+  $("s-copy").textContent = "Copied"; setTimeout(() => $("s-copy").textContent = "Copy links", 1200);
+});
+$("s-refresh").addEventListener("click", async () => {
+  $("s-refresh").disabled = true; $("s-info").textContent = "Scraping studios...";
+  await fetch("/api/studios/refresh");
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const j = await (await fetch("/api/studios/job")).json();
+    if (j.phase === "running") { $("s-info").textContent = `Scraping studios... page ${j.page}, ${j.count} so far`; continue; }
+    if (j.phase === "error") $("s-info").textContent = j.error + (j.needs_setup ? "  (then reload this page)" : "");
+    else await loadStudios();
+    break;
+  }
+  $("s-refresh").disabled = false;
+});
+
+
+// ================= Tags tab =================
+const T = { all:[], only:false, open:new Set(), vids:new Map() };
+
+async function loadTags() {
+  const d = await (await fetch("/api/tags")).json();   // refreshed every visit: new videos change the counts
+  T.all = d.tags; T.scrapedAt = d.scraped_at; T.unlisted = d.unlisted || [];
+  renderTags();
+}
+
+function renderTags() {
+  const q = $("t-q").value.trim().toLowerCase(), sort = $("t-sort").value;
+  let rows = T.all.filter(t => (!q || t.name.toLowerCase().includes(q) || t.slug.includes(q)) && (!T.only || t.videos));
+  rows = rows.slice().sort(sort === "most"
+    ? (a, b) => b.videos - a.videos || a.name.localeCompare(b.name)
+    : (a, b) => a.name.localeCompare(b.name, undefined, {sensitivity:"base"}));
+  const withVideos = T.all.filter(t => t.videos).length;
+  $("t-count").textContent = rows.length === T.all.length ? `${T.all.length} tags` : `${rows.length} / ${T.all.length} tags`;
+  $("t-info").textContent = T.all.length
+    ? `${withVideos} have videos from your scraped performers` + (T.unlisted.length ? ` · ${T.unlisted.length} tags on videos aren't in the list` : "")
+    : "No tags saved yet.";
+  $("t-only").classList.toggle("on", T.only);
+  $("t-list").replaceChildren(...rows.map(tagRow));
+}
+
+function tagRow(t) {
+  const row = document.createElement("div"); row.className = "trow" + (t.videos ? "" : " empty");
+  const head = document.createElement("button"); head.type = "button"; head.className = "thead";
+  head.setAttribute("aria-expanded", String(T.open.has(t.slug)));
+  const arrow = document.createElement("span"); arrow.className = "arrow"; arrow.textContent = t.videos ? "▸" : "";
+  const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = t.name;
+  const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = t.videos ? `${t.videos} video${t.videos === 1 ? "" : "s"}` : "0";
+  const link = document.createElement("a"); link.className = "tlink"; link.href = t.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "data18 ↗";
+  link.addEventListener("click", e => e.stopPropagation());
+  head.append(arrow, nm, link, cnt);
+  row.append(head);
+  if (t.videos) {
+    head.addEventListener("click", () => toggleTag(t, row, head));
+    if (T.open.has(t.slug)) fillTag(t, row);
+  }
+  return row;
+}
+
+async function toggleTag(t, row, head) {
+  if (T.open.has(t.slug)) { T.open.delete(t.slug); row.querySelector(".tvids")?.remove(); head.setAttribute("aria-expanded", "false"); return; }
+  T.open.add(t.slug); head.setAttribute("aria-expanded", "true"); fillTag(t, row);
+}
+
+async function fillTag(t, row) {
+  const box = document.createElement("div"); box.className = "tvids"; box.textContent = "Loading...";
+  row.append(box);
+  if (!T.vids.has(t.slug)) T.vids.set(t.slug, (await (await fetch("/api/tag-videos?slug=" + encodeURIComponent(t.slug))).json()).videos);
+  if (!box.isConnected) return;
+  box.replaceChildren(...T.vids.get(t.slug).map(v => {
+    const d = document.createElement("div"); d.className = "tv";
+    const img = document.createElement("img"); img.src = v.thumbnail; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+    const info = document.createElement("div");
+    const a = document.createElement("a"); a.href = v.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = v.title;
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = [v.date, v.studio, "scraped from " + v.scraped_from.join(", ")].filter(Boolean).join(" · ");
+    info.append(a, meta); d.append(img, info);
+    return d;
+  }));
+}
+
+$("t-q").addEventListener("input", renderTags);
+$("t-sort").addEventListener("input", renderTags);
+$("t-only").addEventListener("click", () => { T.only = !T.only; renderTags(); });
+
+
+// ================= Pornstars tab =================
+// rows from the server: [slug, name, picture, scenes, movies, rank]
+const P = { all:[], loaded:false, only:false, shown:0, rows:[] };
+const BATCH = 120;
+
+async function loadStars() {
+  $("p-info").textContent = "Loading...";
+  const d = await (await fetch("/api/pornstars")).json();
+  P.all = d.stars.map(([slug, name, pic, scenes, movies, rank]) => ({slug, name, pic, scenes, movies, rank, key:name.toLowerCase()}));
+  P.loaded = true; P.scrapedAt = d.scraped_at;
+  renderStars();
+}
+
+function renderStars() {
+  const q = $("p-q").value.trim().toLowerCase(), sort = $("p-sort").value;
+  let rows = P.all.filter(x => (!q || x.key.includes(q)) && (!P.only || x.pic));
+  const az = (a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  rows = rows.slice().sort({ site:(a, b) => b.rank - a.rank, az, za:(a, b) => az(b, a),
+                            most:(a, b) => b.scenes - a.scenes || az(a, b) }[sort]);
+  P.rows = rows; P.shown = 0;
+  const withPic = P.all.filter(x => x.pic).length;
+  $("p-count").textContent = rows.length === P.all.length ? `${P.all.length.toLocaleString()} pornstars` : `${rows.length.toLocaleString()} / ${P.all.length.toLocaleString()}`;
+  $("p-info").textContent = P.all.length
+    ? `${withPic.toLocaleString()} with a photo · last scraped ${P.scrapedAt}`
+    : 'No pornstars saved yet. Click "Re-scrape from data18" (takes about 2 minutes).';
+  $("p-pics").classList.toggle("on", P.only);
+  $("p-grid").replaceChildren();
+  showMoreStars();
+}
+
+function showMoreStars() {
+  const next = P.rows.slice(P.shown, P.shown + BATCH);
+  P.shown += next.length;
+  const frag = document.createDocumentFragment();
+  for (const x of next) {
+    const a = document.createElement("a"); a.className = "pcard"; a.href = "https://www.data18.com/name/" + x.slug; a.target = "_blank"; a.rel = "noopener";
+    const pic = document.createElement("div"); pic.className = "pic";
+    if (x.pic) { const img = document.createElement("img"); img.src = x.pic; img.alt = ""; img.loading = "lazy"; img.referrerPolicy = "no-referrer"; pic.append(img); }
+    else pic.textContent = x.name.split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
+    const n = document.createElement("div"); n.className = "pn"; n.textContent = x.name;
+    const sc = document.createElement("div"); sc.className = "ps"; sc.textContent = `${x.scenes.toLocaleString()} scene${x.scenes === 1 ? "" : "s"}`;
+    a.append(pic, n, sc); frag.append(a);
+  }
+  $("p-grid").append(frag);
+  $("p-more").textContent = P.shown < P.rows.length ? `Showing ${P.shown.toLocaleString()} of ${P.rows.length.toLocaleString()}. Scroll or click here for more` : (P.rows.length ? "" : "No matches");
+}
+// load the next batch as the bottom comes into view (observer, with a scroll listener as backup)
+function fillStars() {
+  while (!$("pg-stars").hidden && P.shown < P.rows.length && $("p-more").getBoundingClientRect().top < innerHeight + 600) showMoreStars();
+}
+new IntersectionObserver(es => { if (es[0].isIntersecting) fillStars(); }, {rootMargin:"600px"}).observe($("p-more"));
+$("p-more").addEventListener("click", () => { for (let i = 0; i < 4 && P.shown < P.rows.length; i++) showMoreStars(); });
+let fillQueued = false;
+addEventListener("scroll", () => { if (!fillQueued) { fillQueued = true; setTimeout(() => { fillQueued = false; fillStars(); }, 80); } }, {passive:true});
+
+let pTimer;
+$("p-q").addEventListener("input", () => { clearTimeout(pTimer); pTimer = setTimeout(renderStars, 150); });
+$("p-sort").addEventListener("input", renderStars);
+$("p-pics").addEventListener("click", () => { P.only = !P.only; renderStars(); });
+$("p-refresh").addEventListener("click", async () => {
+  $("p-refresh").disabled = true; $("p-info").textContent = "Scraping...";
+  await fetch("/api/pornstars/refresh");
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const j = await (await fetch("/api/pornstars/job")).json();
+    if (j.phase === "running") { $("p-info").textContent = `Scraping... page ${j.page} of about 560, ${j.count.toLocaleString()} so far`; continue; }
+    if (j.phase === "error") { $("p-info").textContent = j.error + (j.needs_setup ? "  (then reload this page)" : ""); break; }
+    await loadStars(); break;
+  }
+  $("p-refresh").disabled = false;
+});
+{ const h = location.hash.slice(1); if (h === "studios" || h === "tags" || h === "stars") showTab(h); }
+</script>
+</body>
+</html>

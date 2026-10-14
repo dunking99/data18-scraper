@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>data18 scraper</title>
+<style>
+  :root { --bg:#f6f6f4; --fg:#1c1c1a; --muted:#6b6b66; --card:#fff; --line:#dcdcd6; --accent:#2b5fd9; --err:#b3261e;
+          --inc:#1d7a3a; --inc-bg:#d9f2e0; --exc:#b3261e; --exc-bg:#fadcd9;
+          --cat-s:60%; --cat-l:88%; --cat-t:28%; --eth-s:75%; --eth-l:86%; --eth-t:30%; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --fg:#ececea; --muted:#9a9a94; --card:#1f1f1d; --line:#35352f; --accent:#7ba3ff; --err:#ff8a80;
+            --inc:#7fd99a; --inc-bg:#1d3a27; --exc:#ff9a90; --exc-bg:#43211e;
+            --cat-s:35%; --cat-l:24%; --cat-t:82%; --eth-s:45%; --eth-l:25%; --eth-t:84%; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  form { display:flex; gap:8px; }
+  input[type=text], select { padding:10px 12px; font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  form input[type=text] { flex:1; }
+  button { padding:10px 16px; font:inherit; color:#fff; background:var(--accent); border:0; border-radius:8px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.ghost { background:none; color:var(--accent); border:1px solid var(--line); padding:6px 10px; font-size:13px; }
+  button.ghost.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #status { margin:14px 0 6px; color:var(--muted); min-height:1.4em; }
+  #status.err { color:var(--err); }
+  #prog { height:4px; background:var(--line); border-radius:2px; overflow:hidden; margin-bottom:10px; }
+  #prog > div { height:100%; width:0; background:var(--accent); transition:width .3s; }
+
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin:12px 0; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .row + .row, .group + .group { margin-top:10px; }
+  .row select, .row input[type=text] { padding:6px 8px; font-size:13px; }
+  .row input[type=text] { flex:1; min-width:160px; }
+  .group h3 { margin:0 0 6px; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  .hint { font-weight:400; text-transform:none; letter-spacing:0; }
+  .chips { display:flex; flex-wrap:wrap; gap:5px; }
+
+  .chip { --h:220; display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:6px; border:1px solid transparent;
+          font-size:12.5px; line-height:1.5; cursor:pointer; user-select:none; font-family:inherit;
+          background:hsl(var(--h) var(--cat-s) var(--cat-l)); color:hsl(var(--h) 45% var(--cat-t)); }
+  .chip.eth { background:hsl(var(--h) var(--eth-s) var(--eth-l)); color:hsl(var(--h) 55% var(--eth-t)); }
+  .chip .n { opacity:.65; font-variant-numeric:tabular-nums; }
+  .chip.inc { background:var(--inc-bg); color:var(--inc); border-color:var(--inc); font-weight:600; }
+  .chip.exc { background:var(--exc-bg); color:var(--exc); border-color:var(--exc); text-decoration:line-through; }
+  .chip.inc::before { content:"+"; } .chip.exc::before { content:"−"; text-decoration:none; }
+
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:12px; align-items:flex-start; padding:10px; margin-bottom:8px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  li img { width:96px; height:54px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
+  .num { color:var(--muted); font-variant-numeric:tabular-nums; min-width:3.2em; padding-top:1px; }
+  .main { min-width:0; flex:1; }
+  .main a { color:var(--fg); font-weight:600; text-decoration:none; }
+  .main a:hover { color:var(--accent); text-decoration:underline; }
+  .meta { color:var(--muted); font-size:13px; }
+  li .chips { margin-top:6px; }
+  .more { margin-top:6px; }
+  .tabs { display:flex; gap:4px; margin:-6px 0 16px; border-bottom:1px solid var(--line); }
+  .tabs button { background:none; color:var(--muted); border-radius:8px 8px 0 0; padding:8px 14px; border-bottom:2px solid transparent; }
+  .tabs button[aria-selected=true] { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
+  #pg-creators .srow { display:flex; align-items:center; gap:12px; padding:8px 10px; margin-bottom:4px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  #pg-creators .srow .nm { flex:1; min-width:0; font-weight:600; color:var(--fg); text-decoration:none; overflow-wrap:anywhere; }
+  #pg-creators .srow .nm:hover { color:var(--accent); text-decoration:underline; }
+  #pg-creators .srow .cnt { color:var(--muted); font-variant-numeric:tabular-nums; font-size:13px; }
+  #pg-creators .srow .slug { color:var(--muted); font-size:12px; white-space:nowrap; }
+  #pg-studios .srow { display:flex; align-items:baseline; gap:10px; padding:8px 10px; margin-bottom:4px; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  #pg-studios .srow.child { margin-left:22px; border-left:3px solid var(--accent); }
+  #pg-studios .srow .nm { flex:1; min-width:0; font-weight:600; color:var(--fg); text-decoration:none; overflow-wrap:anywhere; }
+  #pg-studios .srow .nm:hover { color:var(--accent); text-decoration:underline; }
+  #pg-studios .srow.parentrow .nm { font-weight:700; }
+  #pg-studios .srow .cnt { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:13px; }
+  #pg-studios .srow .slug { color:var(--muted); font-size:12px; }
+  #pg-studios .via { font-size:12px; }
+  #pg-studios .pill { color:var(--muted); font-size:12px; padding:0 6px; border:1px solid var(--line); border-radius:10px; }
+  #pg-tags .trow { background:var(--card); border:1px solid var(--line); border-radius:8px; margin-bottom:4px; }
+  #pg-tags .thead { display:flex; align-items:baseline; gap:10px; width:100%; padding:8px 10px; background:none; color:var(--fg); border:0; border-radius:8px; text-align:left; }
+  #pg-tags .thead .arrow { display:inline-block; width:1em; color:var(--muted); transition:transform .15s; }
+  #pg-tags .thead[aria-expanded=true] .arrow { transform:rotate(90deg); }
+  #pg-tags .thead .nm { flex:1; font-weight:600; }
+  #pg-tags .thead .cnt { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+  #pg-tags .trow.empty .nm { font-weight:400; color:var(--muted); }
+  #pg-tags .tlink { color:var(--muted); font-size:12px; text-decoration:none; padding-right:4px; }
+  #pg-tags .tlink:hover { color:var(--accent); }
+  #pg-tags .tvids { padding:2px 10px 10px; }
+  #pg-tags .tv { display:flex; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  #pg-tags .tv img { width:80px; height:45px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
+  #pg-tags .tv a { color:var(--fg); font-weight:600; text-decoration:none; }
+  #pg-tags .tv a:hover { color:var(--accent); text-decoration:underline; }
+  #p-grid { display:grid; gap:10px; grid-template-columns:repeat(auto-fill, minmax(132px, 1fr)); }
+  .pcard { display:block; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; text-decoration:none; color:var(--fg); }
+  .pcard:hover { border-color:var(--accent); }
+  .pcard .pic { aspect-ratio:1; width:100%; display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--muted); font-size:28px; font-weight:600; }
+  .pcard .pic img { width:100%; height:100%; object-fit:cover; display:block; }
+  .pcard .pn { padding:6px 8px 0; font-size:13px; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
+  .pcard .ps { padding:0 8px 7px; font-size:12px; color:var(--muted); }
+  li { flex-wrap:wrap; }
+  li > img { cursor:default; }
+  .pbtn { margin-top:6px; display:inline-flex; align-items:center; gap:6px; }
+  .pbtn .arrow { display:inline-block; transition:transform .15s; }
+  .pbtn[aria-expanded=true] .arrow { transform:rotate(90deg); }
+  .pbtn .sum { color:var(--muted); font-size:12px; }
+  .nophotos { margin-top:6px; color:var(--muted); font-size:12.5px; }
+  .gal { flex-basis:100%; margin-top:8px; border-top:1px solid var(--line); padding-top:10px; }
+  .gal h4 { margin:12px 0 6px; font-size:13px; }
+  .gal h4:first-child { margin-top:0; }
+  .gal h4 .n { color:var(--muted); font-weight:400; }
+  .grid { display:grid; gap:8px; grid-template-columns:repeat(auto-fill, minmax(max(170px, calc((100% - 32px) / 5)), 1fr)); }
+  .grid .ph { display:block; aspect-ratio:4/3; background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; padding:0; cursor:zoom-in; }
+  .grid .ph img { width:100%; height:100%; object-fit:contain; display:block; }
+  .bbar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bbar i { display:block; height:100%; width:0; background:var(--accent); transition:width .4s; }
+  .pcard { margin-bottom:12px; }
+  .ptitle { font-weight:700; font-size:16px; color:var(--fg); text-decoration:none; }
+  .ptitle:hover { color:var(--accent); text-decoration:underline; }
+  .psamples { display:flex; gap:6px; margin:8px 0; }
+  .psamples img { height:64px; width:auto; max-width:23%; object-fit:cover; border-radius:4px; background:var(--line); }
+  .posrow { display:flex; align-items:center; gap:10px; padding:4px 0; border-top:1px solid var(--line); }
+  .posrow .nm { width:190px; flex:none; color:var(--fg); text-decoration:none; font-size:14px; }
+  .posrow .nm:hover { color:var(--accent); text-decoration:underline; }
+  .posrow .cnt { color:var(--muted); font-variant-numeric:tabular-nums; font-size:13px; min-width:90px; text-align:right; }
+  .pbar { flex:1; height:8px; background:var(--line); border-radius:4px; overflow:hidden; } .pbar i { display:block; height:100%; background:var(--accent); }
+  .pgrid { grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); }
+  .pgrid .pw { position:relative; display:flex; flex-direction:column; gap:3px; }
+  .pgrid .pbadge { position:absolute; left:4px; top:4px; padding:1px 6px; border-radius:5px; font-size:11px; font-weight:600; background:rgba(0,0,0,.76); color:#fff; pointer-events:none; }
+  .pgrid .pcap { font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:none; }
+  .pgrid .pcap:hover { color:var(--accent); }
+  #pos-crumb a { color:var(--accent); }
+  .selbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 10px; }
+  .selbar button { padding:3px 10px; font-size:12px; }
+  .grid .pw { position:relative; }
+  .grid .pw .pick { position:absolute; top:6px; left:6px; width:18px; height:18px; cursor:pointer; accent-color:var(--accent); }
+  .head2 { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  .head2 .rbtn { padding:3px 10px; font-size:12px; }
+  .pred { flex-basis:100%; margin-top:8px; border-top:1px solid var(--line); padding-top:10px; }
+  .pred[hidden] { display:none; }
+  .pred .ptop { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .pred .ptop select { padding:3px 6px; font-size:12px; }
+  .pred .ptop button { padding:3px 10px; font-size:12px; }
+  .pred .err { color:var(--err); }
+  .pred h4 { margin:12px 0 4px; font-size:13px; } .pred h4 .n { color:var(--muted); font-weight:400; }
+  .pred .warn { color:var(--muted); font-size:12px; margin:0 0 6px; }
+  .pred .sumrow { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; }
+  .pred .sc { padding:2px 8px; border-radius:6px; border:1px solid var(--line); font-size:12px; background:var(--card); font-variant-numeric:tabular-nums; }
+  .pred .sc.u { color:var(--muted); border-style:dashed; }
+  .pred .tile { position:relative; }
+  .pred .badges { position:absolute; left:4px; bottom:4px; right:4px; display:flex; flex-direction:column; gap:2px; align-items:flex-start; pointer-events:none; }
+  .pred .badge { padding:1px 6px; border-radius:5px; font-size:11px; font-weight:600; background:rgba(0,0,0,.76); color:#fff; max-width:100%; line-height:1.25; }
+  .pred .badge.u { background:rgba(120,120,114,.9); font-weight:400; }
+  .pred .badge .who { opacity:.65; font-weight:400; margin-right:4px; }
+  .pred .tile.dis { outline:2px solid var(--accent); outline-offset:-2px; }
+  .pred .mrow { display:flex; align-items:baseline; gap:8px; margin:0 0 4px; flex-wrap:wrap; } .pred .mrow .mn { font-size:12px; color:var(--muted); min-width:92px; }
+  .pred .agree { font-size:13px; margin:4px 0 8px; } .pred label.chk { display:inline-flex; gap:5px; align-items:center; cursor:pointer; }
+  #lb { position:fixed; inset:0; z-index:50; background:rgba(0,0,0,.92); display:none; align-items:center; justify-content:center; }
+  #lb.open { display:flex; }
+  #lb img { max-width:94vw; max-height:90vh; object-fit:contain; }
+  #lb .cap { position:fixed; bottom:10px; left:0; right:0; text-align:center; color:#ddd; font-size:13px; }
+  #lb button { position:fixed; background:rgba(255,255,255,.12); color:#fff; padding:10px 14px; font-size:20px; border-radius:8px; }
+  #lb .x { top:12px; right:12px; } #lb .prev { left:12px; top:50%; } #lb .next { right:12px; top:50%; }
+  @media (max-width:560px) { li > img { width:72px; height:40px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>data18 scraper</h1>
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-perf" aria-selected="true">Performers</button>
+    <button type="button" role="tab" id="tab-studios" aria-selected="false">Studios</button>
+    <button type="button" role="tab" id="tab-tags" aria-selected="false">Tags</button>
+    <button type="button" role="tab" id="tab-stars" aria-selected="false">Pornstars</button>
+    <button type="button" role="tab" id="tab-creators" aria-selected="false">Scraped creators</button>
+    <button type="button" role="tab" id="tab-positions" aria-selected="false">By position</button>
+  </nav>
+  <div id="pg-perf">
+  <form id="f">
+    <input type="text" id="name" list="saved" placeholder="Performer name, e.g. Kyler Quinn" autofocus autocomplete="off">
+    <datalist id="saved"></datalist>
+    <button id="go">Scrape</button>
+  </form>
+  <div id="status"></div>
+  <div id="prog" hidden><div></div></div>
+
+  <div id="results" hidden>
+    <div class="panel" id="batch">
+      <div class="row">
+        <strong>Run the model on this creator's videos</strong>
+        <label class="meta"><input type="radio" name="bmode" value="all" checked> all videos</label>
+        <label class="meta"><input type="radio" name="bmode" value="random"> <input type="number" id="bcount" value="50" min="1" max="1000" style="width:72px"> at random</label>
+        <label class="meta" title="Skip videos that already have model results"><input type="checkbox" id="bnew" checked> only new videos</label>
+        <label class="meta" title="Photosets are posed photos, not video frames: the model is less reliable on them"><input type="checkbox" id="bphotos"> include photosets</label>
+        <button id="bgo" type="button">Run the model</button>
+        <button id="bcancel" class="ghost" type="button" hidden>Cancel</button>
+        <button id="bview" class="ghost" type="button">See results by position</button>
+      </div>
+      <div id="bprog" hidden><div class="bbar"><i></i></div></div>
+      <div class="meta" id="binfo" style="margin-top:6px"></div>
+    </div>
+    <div class="panel" id="filters">
+      <div class="row">
+        <strong id="count"></strong>
+        <input type="text" id="filter" placeholder="Search titles...">
+        <button class="ghost" id="clear" type="button">Clear filters</button>
+        <button class="ghost" id="copy" type="button">Copy links</button>
+        <button class="ghost" id="refresh" type="button">Re-scrape</button>
+      </div>
+      <div class="row">
+        <select id="studio"></select>
+        <select id="costar"></select>
+        <select id="year"></select>
+        <select id="sort">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+          <option value="az">Title A–Z</option>
+          <option value="photos_desc">Most photos first</option>
+          <option value="photos_asc">Fewest photos first</option>
+        </select>
+      </div>
+      <div class="group">
+        <h3>Categories <span class="hint">click once to require, twice to exclude</span>
+          <button class="ghost" id="mode" type="button" title="Whether a video needs all the required categories or any one of them">match: all</button></h3>
+        <div class="chips" id="catchips"></div>
+        <button class="ghost more" id="catmore" type="button" hidden></button>
+      </div>
+      <div class="group">
+        <h3>Ethnicity</h3>
+        <div class="chips" id="ethchips"></div>
+      </div>
+    </div>
+    <ul id="list"></ul>
+  </div>
+  </div><!-- /pg-perf -->
+
+  <div id="pg-studios" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="s-count"></strong>
+        <input type="text" id="s-q" placeholder="Search studios..." autocomplete="off">
+        <button class="ghost" id="s-refresh" type="button">Re-scrape from data18</button>
+      </div>
+      <div class="row">
+        <select id="s-type">
+          <option value="all">All studios</option>
+          <option value="top">Top-level only</option>
+          <option value="sub">Sub-channels only</option>
+        </select>
+        <select id="s-parent"></select>
+        <select id="s-sort">
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+          <option value="most">Most scenes</option>
+          <option value="least">Fewest scenes</option>
+        </select>
+        <button class="ghost" id="s-group" type="button" title="Show each sub-channel under its parent channel">Group by channel</button>
+        <button class="ghost" id="s-copy" type="button">Copy links</button>
+      </div>
+      <div id="s-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="s-list"></div>
+  </div>
+
+  <div id="pg-tags" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="t-count"></strong>
+        <input type="text" id="t-q" placeholder="Search tags..." autocomplete="off">
+        <select id="t-sort">
+          <option value="az">A–Z</option>
+          <option value="most">Most videos</option>
+        </select>
+        <button class="ghost" id="t-only" type="button" title="Hide tags none of your scraped videos have">Only tags with videos</button>
+      </div>
+      <div id="t-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="t-list"></div>
+  </div>
+  <div id="pg-positions" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="pos-count"></strong>
+        <select id="pos-creator" title="Creator"><option value="">All creators</option></select>
+        <select id="pos-type" title="Which images"><option value="stills">Video stills</option><option value="photoset">Photosets</option><option value="all">Stills and photosets</option></select>
+        <label class="meta">position sure at least <select id="pos-min"><option value="0.3">0.3</option><option value="0.4">0.4</option><option value="0.5" selected>0.5</option><option value="0.6">0.6</option><option value="0.7">0.7</option><option value="0.8">0.8</option><option value="0.9">0.9</option></select></label>
+        <label class="meta">sub-type sure at least <select id="pos-submin"><option value="0" selected>any</option><option value="0.4">0.4</option><option value="0.5">0.5</option><option value="0.6">0.6</option><option value="0.7">0.7</option></select></label>
+      </div>
+      <div class="meta" id="pos-crumb" style="margin-top:8px"></div>
+    </div>
+    <div id="pos-body"></div>
+  </div>
+  <div id="pg-creators" hidden>
+    <div class="panel"><div class="row"><strong id="c-count"></strong><input type="text" id="c-q" placeholder="Search creators..." autocomplete="off"></div>
+      <div class="meta" style="margin-top:8px">Every performer you have scraped so far. Open one to see its videos, photos and model results.</div></div>
+    <div id="c-list"></div>
+  </div>
+  <div id="pg-stars" hidden>
+    <div class="panel">
+      <div class="row">
+        <strong id="p-count"></strong>
+        <input type="text" id="p-q" placeholder="Search pornstars..." autocomplete="off">
+        <select id="p-sort">
+          <option value="site">Newest activity</option>
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+          <option value="most">Most scenes</option>
+        </select>
+        <button class="ghost" id="p-pics" type="button" title="Hide performers data18 has no photo for">Only with photos</button>
+        <button class="ghost" id="p-refresh" type="button">Re-scrape from data18</button>
+      </div>
+      <div id="p-info" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div id="p-grid"></div>
+    <div id="p-more" class="meta" style="text-align:center;padding:16px;cursor:pointer" title="Click to load more"></div>
+  </div>
+</main>
+<div id="lb" aria-hidden="true">
+  <button class="x" type="button" aria-label="Close">✕</button>
+  <button class="prev" type="button" aria-label="Previous">‹</button>
+  <img alt="">
+  <button class="next" type="button" aria-label="Next">›</button>
+  <div class="cap"></div>
+</div>
+<script>
+const BASE = location.pathname.replace(/[^/]*$/, "");   // "/" when opened on its own, "/d18/" inside the Light table
+const $ = id => document.getElementById(id);
+let data = null, pollTimer = null, lastSig = "";
+const CAT_LIMIT = 30;
+// filter state: tag -> "inc" | "exc"
+const F = { cats:new Map(), eths:new Map(), anyMode:false, showAllCats:false };
+
+function setStatus(msg, err) { $("status").textContent = msg; $("status").className = err ? "err" : ""; }
+function setProgress(frac) { $("prog").hidden = frac == null; if (frac != null) $("prog").firstElementChild.style.width = Math.round(frac * 100) + "%"; }
+
+// stable hue from a string; categories cool (180-300), ethnicity warm (10-60)
+function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; }
+const catHue = s => 180 + hash(s) % 120;
+const ethHue = s => 10 + hash(s) % 50;
+
+function chip(label, {eth=false, state="", count=null, onclick=null}={}) {
+  const b = document.createElement(onclick ? "button" : "span");
+  if (onclick) { b.type = "button"; b.addEventListener("click", onclick); }
+  b.className = "chip" + (eth ? " eth" : "") + (state ? " " + state : "");
+  b.style.setProperty("--h", eth ? ethHue(label) : catHue(label));
+  b.textContent = label;
+  if (count != null) { const n = document.createElement("span"); n.className = "n"; n.textContent = count; b.append(n); }
+  return b;
+}
+
+function year(v) { const m = /\b(19|20)\d{2}\b/.exec(v.date || ""); return m ? m[0] : ""; }
+function counts(vids, key) {
+  const c = new Map();
+  for (const v of vids) for (const t of v[key] || []) c.set(t, (c.get(t) || 0) + 1);
+  return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function passes(v, ignore) {
+  const q = $("filter").value.toLowerCase();
+  if (q && !v.title.toLowerCase().includes(q)) return false;
+  if (ignore !== "studio" && $("studio").value && v.studio !== $("studio").value) return false;
+  if (ignore !== "costar" && $("costar").value && !v.performers.includes($("costar").value)) return false;
+  if (ignore !== "year" && $("year").value && year(v) !== $("year").value) return false;
+  for (const [map, key] of [[F.cats, "categories"], [F.eths, "ethnicity"]]) {
+    const have = v[key];
+    const inc = [...map].filter(([, s]) => s === "inc").map(([t]) => t);
+    const exc = [...map].filter(([, s]) => s === "exc").map(([t]) => t);
+    if (inc.length || exc.length) {
+      if (!have) return false;                    // details not fetched yet
+      if (exc.some(t => have.includes(t))) return false;
+      if (inc.length && !(F.anyMode ? inc.some(t => have.includes(t)) : inc.every(t => have.includes(t)))) return false;
+    }
+  }
+  return true;
+}
+
+function fillSelect(sel, firstLabel, values) {
+  const cur = sel.value;
+  sel.replaceChildren(new Option(firstLabel, ""), ...values.map(([v, n]) => new Option(`${v} (${n})`, v)));
+  if (values.some(([v]) => v === cur)) sel.value = cur;
+}
+
+function cycle(map, tag) {
+  const s = map.get(tag);
+  if (!s) map.set(tag, "inc"); else if (s === "inc") map.set(tag, "exc"); else map.delete(tag);
+  render();
+}
+
+function renderFilters() {
+  const all = data.videos;
+  fillSelect($("studio"), "Any studio", counts(all.map(v => ({s: v.studio ? [v.studio] : []})), "s"));
+  fillSelect($("costar"), "Anyone", counts(all, "performers"));
+  fillSelect($("year"), "Any year", counts(all.map(v => ({y: year(v) ? [year(v)] : []})), "y").sort((a, b) => b[0].localeCompare(a[0])));
+  const cats = counts(all, "categories"), eths = counts(all, "ethnicity");
+  // keep selected chips visible even when they'd fall outside the top list
+  let shown = F.showAllCats ? cats : cats.slice(0, CAT_LIMIT);
+  for (const [t] of F.cats) if (!shown.some(([x]) => x === t)) shown = shown.concat([[t, cats.find(([x]) => x === t)?.[1] ?? 0]]);
+  $("catchips").replaceChildren(...shown.map(([t, n]) => chip(t, {state:F.cats.get(t) || "", count:n, onclick:() => cycle(F.cats, t)})));
+  $("catmore").hidden = cats.length <= CAT_LIMIT;
+  $("catmore").textContent = F.showAllCats ? "Show fewer" : `Show all ${cats.length} categories`;
+  $("ethchips").replaceChildren(...eths.map(([t, n]) => chip(t, {eth:true, state:F.eths.get(t) || "", count:n, onclick:() => cycle(F.eths, t)})));
+  if (!cats.length && !eths.length) $("catchips").textContent = "Categories are still loading...";
+}
+
+function render() {
+  if (!data) return;
+  renderFilters();
+  const sort = $("sort").value;
+  let vids = data.videos.filter(v => passes(v));
+  const photoTotal = v => (v.galleries || []).reduce((n, g) => n + (g.count || 0), 0);   // every gallery: Primary, Photoset, Video Stills, Trailer...
+  if (sort === "photos_desc") vids = vids.slice().sort((a, b) => photoTotal(b) - photoTotal(a) || Number(b.number) - Number(a.number));
+  else if (sort === "photos_asc") vids = vids.slice().sort((a, b) => photoTotal(a) - photoTotal(b) || Number(b.number) - Number(a.number));
+  else if (sort === "old") vids = vids.slice().sort((a, b) => Number(a.number) - Number(b.number));
+  else if (sort === "az") vids = vids.slice().sort((a, b) => a.title.localeCompare(b.title));
+  else vids = vids.slice().sort((a, b) => Number(b.number) - Number(a.number));
+  $("count").textContent = `${vids.length}${vids.length !== data.videos.length ? " / " + data.videos.length : ""} videos`;
+  $("list").replaceChildren(...vids.map(rowFor));
+}
+
+// ---- rows (cached so an expanded photo panel survives the refreshes while details load)
+const rowCache = new Map();   // scene_id -> {sig, li}
+const panels = new Map();     // scene_id -> {panel, btn}   (only for expanded rows)
+const photoData = new Map();  // scene_id -> galleries
+
+function rowSig(v) {
+  const st = t => (F.cats.get(t) || F.eths.get(t) || "");
+  return JSON.stringify([v.categories, v.ethnicity, v.galleries, (v.categories || []).map(st), (v.ethnicity || []).map(st)]);
+}
+function rowFor(v) {
+  const sig = rowSig(v), hit = rowCache.get(v.scene_id);
+  if (hit && hit.sig === sig) return hit.li;
+  const li = buildRow(v);
+  rowCache.set(v.scene_id, {sig, li});
+  return li;
+}
+
+function buildRow(v) {
+  const li = document.createElement("li");
+  const img = document.createElement("img"); img.src = v.thumbnail; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+  const num = document.createElement("span"); num.className = "num"; num.textContent = v.number ? "#" + v.number : "";
+  const main = document.createElement("div"); main.className = "main";
+  const a = document.createElement("a"); a.href = v.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = v.title;
+  const meta = document.createElement("div"); meta.className = "meta";
+  meta.textContent = [v.date, v.studio, v.performers.length ? "With " + v.performers.join(", ") : ""].filter(Boolean).join(" · ");
+  const head = document.createElement("div"); head.className = "head2"; head.append(a);
+  const canRun = (v.galleries || []).some(g => /^(video\s?stills|photoset)/i.test(g.label));
+  let rb = null;
+  if (canRun) {
+    rb = document.createElement("button"); rb.type = "button"; rb.className = "ghost rbtn"; rb.textContent = "Run model";
+    rb.title = "Run the position model on this video's stills and photosets"; rb.addEventListener("click", () => runModel(v));
+    head.append(rb);
+  }
+  main.append(head, meta);
+  if ((v.categories && v.categories.length) || (v.ethnicity && v.ethnicity.length)) {
+    const chips = document.createElement("div"); chips.className = "chips";
+    for (const t of v.categories || []) chips.append(chip(t, {state:F.cats.get(t) || "", onclick:() => cycle(F.cats, t)}));
+    for (const t of v.ethnicity || []) chips.append(chip(t, {eth:true, state:F.eths.get(t) || "", onclick:() => cycle(F.eths, t)}));
+    main.append(chips);
+  }
+  if (v.galleries && v.galleries.length) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "ghost pbtn"; btn.setAttribute("aria-expanded", "false");
+    const arrow = document.createElement("span"); arrow.className = "arrow"; arrow.textContent = "▸";
+    const sum = document.createElement("span"); sum.className = "sum";
+    sum.textContent = `${v.galleries.reduce((n, g) => n + (g.count || 0), 0)} photos: ` + v.galleries.map(g => `${g.label} ${g.count}`).join(" · ");
+    btn.append(arrow, document.createTextNode("Photos"), sum);
+    btn.addEventListener("click", () => togglePhotos(v, li, btn));
+    main.append(btn);
+  } else if (v.galleries) {
+    const n = document.createElement("div"); n.className = "nophotos"; n.textContent = "No photos";
+    main.append(n);
+  }
+  li.append(img, num, main);
+  if (rb) { const box = document.createElement("div"); box.className = "pred"; box.hidden = true; li.append(box); predUI.set(v.scene_id, {btn: rb, box}); renderPred(v.scene_id); }
+  const open = panels.get(v.scene_id);          // rebuilt while expanded: put the open panel back
+  if (open) { li.append(open.panel); open.btn = main.querySelector(".pbtn"); open.btn?.setAttribute("aria-expanded", "true"); }
+  return li;
+}
+
+async function togglePhotos(v, li, btn) {
+  const id = v.scene_id, open = panels.get(id);
+  if (open) { open.panel.remove(); panels.delete(id); btn.setAttribute("aria-expanded", "false"); return; }
+  const panel = document.createElement("div"); panel.className = "gal"; panel.textContent = "Loading photos...";
+  panels.set(id, {panel, btn}); btn.setAttribute("aria-expanded", "true"); li.append(panel);
+  try {
+    if (!photoData.has(id)) {
+      const r = await fetch(BASE + "api/photos?scene_id=" + encodeURIComponent(id));
+      if (!r.ok) throw new Error((await r.json()).error || r.status);
+      photoData.set(id, (await r.json()).galleries);
+    }
+    panel.replaceChildren(...photoSections(photoData.get(id), id));
+  } catch (e) { panel.textContent = "Couldn't load photos: " + e.message; }
+}
+
+const proxy = url => BASE + "img?u=" + encodeURIComponent(url);
+const picked = new Map();     // scene_id -> Set of image addresses chosen for a model run
+function photoSections(galleries, sid) {
+  const out = [], sel = () => picked.get(sid) || picked.set(sid, new Set()).get(sid);
+  const bar = document.createElement("div"); bar.className = "selbar";
+  const info = document.createElement("span"); info.className = "meta";
+  const runSel = document.createElement("button"); runSel.type = "button"; runSel.className = "ghost"; runSel.textContent = "Run model on selected";
+  const clear = document.createElement("button"); clear.type = "button"; clear.className = "ghost"; clear.textContent = "Clear";
+  const refresh = () => { const n = sel().size; info.textContent = n ? `${n} image${n === 1 ? "" : "s"} selected` : "Tick images (or use Select all) to run the model on just those."; runSel.disabled = !n; clear.disabled = !n;
+    document.querySelectorAll(`[data-sid="${sid}"] .pick`).forEach(c => { c.checked = sel().has(c.dataset.u); }); };
+  runSel.addEventListener("click", () => runModelOn(sid, [...sel()]));
+  clear.addEventListener("click", () => { sel().clear(); refresh(); });
+  bar.append(runSel, clear, info); out.push(bar);
+  for (const g of galleries) {
+    const h = document.createElement("h4");
+    h.textContent = g.label + " ";
+    const n = document.createElement("span"); n.className = "n"; n.textContent = `(${g.images.length})`; h.append(n);
+    const all = document.createElement("button"); all.type = "button"; all.className = "ghost"; all.style.cssText = "margin-left:8px;padding:2px 8px;font-size:12px"; all.textContent = "Select all";
+    all.addEventListener("click", () => { g.images.forEach(im => sel().add(im.f)); refresh(); }); h.append(all);
+    const grid = document.createElement("div"); grid.className = "grid"; grid.dataset.sid = sid;
+    g.images.forEach((im, i) => {
+      const w = document.createElement("div"); w.className = "pw";
+      const b = document.createElement("button"); b.type = "button"; b.className = "ph";
+      const img = document.createElement("img"); img.loading = "lazy"; img.decoding = "async"; img.alt = `${g.label} ${i + 1}`; img.src = proxy(im.f);
+      b.append(img); b.addEventListener("click", () => openLightbox(g, i));
+      const c = document.createElement("input"); c.type = "checkbox"; c.className = "pick"; c.dataset.u = im.f; c.title = "Include in a model run";
+      c.addEventListener("change", () => { c.checked ? sel().add(im.f) : sel().delete(im.f); refresh(); });
+      w.append(b, c); grid.append(w);
+    });
+    out.push(h, g.images.length ? grid : Object.assign(document.createElement("div"), {className:"meta", textContent:"No images"}));
+  }
+  setTimeout(refresh, 0);
+  return out;
+}
+
+// ---- position models: "Run model" button + results panel. Both models run on the server, each in its own python.
+const predState = new Map();  // scene_id -> {job, results, open, thr, onlyDiff, timer}
+const predUI = new Map();     // scene_id -> {btn, box}   (the current row's elements; rebuilt rows re-register here)
+const RUNNING = ["queued", "galleries", "downloading", "model"];
+const verdict = (m, thr) => m.confidence < thr ? "Unsure" : m.best;
+const mText = (m, thr) => { const v = verdict(m, thr); return v + (v !== "Unsure" && m.sub ? " · " + m.sub : "") + " " + m.confidence.toFixed(2); };
+
+function renderPred(id) {
+  const ui = predUI.get(id), st = predState.get(id);
+  if (!ui) return;
+  const job = st && st.job || {}, running = RUNNING.includes(job.phase);
+  const gs = st && st.results ? st.results.galleries : [];
+  ui.btn.disabled = running;
+  ui.btn.textContent = running ? (job.phase === "downloading" ? `Downloading ${job.done || 0}/${job.total || "?"}` : job.phase === "model" ? `Running ${job.model || "model"}…` : "Starting…")
+    : gs.length && st.results.complete ? (st.open ? "Hide results" : "Show results") : "Run model";
+  ui.box.hidden = !(st && st.open);
+  if (ui.box.hidden) return;
+  const mods = st.results ? st.results.models : {}, ids = Object.keys(mods);
+  const top = document.createElement("div"); top.className = "ptop";
+  if (running) top.append(job.phase === "model" ? `Running ${job.model || "the model"} (the first run of each model loads it, about 20 s)…` : job.phase === "downloading" ? `Downloading images ${job.done || 0}/${job.total || "?"}…` : "Finding this video's galleries…");
+  else if (job.phase === "error") { const e = document.createElement("span"); e.className = "err"; e.textContent = job.error + (job.needs_setup ? " (run setup_session.py, then reload)" : ""); top.append(e); }
+  if (gs.length) {
+    const sel = document.createElement("select");
+    for (const t of [0.3, 0.4, 0.5, 0.6, 0.7, 0.8]) sel.append(new Option(`Unsure below ${t}`, t, false, t === st.thr));
+    sel.addEventListener("change", () => { st.thr = Number(sel.value); renderPred(id); });
+    const lab = document.createElement("label"); lab.className = "chk"; const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!st.onlyDiff;
+    cb.addEventListener("change", () => { st.onlyDiff = cb.checked; renderPred(id); }); lab.append(cb, "Only where the models disagree");
+    const re = document.createElement("button"); re.type = "button"; re.className = "ghost"; re.textContent = "Re-run"; re.disabled = running;
+    re.title = "Run both models again on every image of this video"; re.addEventListener("click", () => runModel({scene_id: id}, true));
+    top.append(sel, lab, re);
+    const old = ids.filter(m => mods[m].version && mods[m].version !== mods[m].current_version).map(m => mods[m].label);
+    if (old.length) { const w = document.createElement("span"); w.textContent = `${old.join(", ")}: these results are from an older version of the model, press Re-run to refresh.`; top.append(w); }
+  }
+  const parts = [top];
+  for (const g of gs) {
+    const h = document.createElement("h4"); h.textContent = (g.kind === "photoset" ? "Photosets" : g.label) + " "; const n = document.createElement("span"); n.className = "n"; n.textContent = `(${g.images.length} images)`; h.append(n);
+    parts.push(h);
+    if (g.kind === "photoset") { const w = document.createElement("div"); w.className = "warn"; w.textContent = "Posed photos, not video frames: the models were trained on video frames, so treat these results with extra caution."; parts.push(w); }
+    for (const m of ids) {
+      const counts = new Map(); let nn = 0;
+      for (const im of g.images) if (im.models[m]) { nn++; const v = verdict(im.models[m], st.thr); counts.set(v, (counts.get(v) || 0) + 1); }
+      if (!nn) continue;
+      const row = document.createElement("div"); row.className = "mrow"; const mn = document.createElement("span"); mn.className = "mn"; mn.textContent = mods[m].label; row.append(mn);
+      for (const [l, c] of [...counts].sort((a, b) => b[1] - a[1])) { const sc = document.createElement("span"); sc.className = "sc" + (l === "Unsure" ? " u" : ""); sc.textContent = `${l} ${c} (${Math.round(100 * c / nn)}%)`; row.append(sc); }
+      parts.push(row);
+    }
+    const both = g.images.filter(im => ids.every(m => im.models[m]));
+    const dis = im => new Set(ids.map(m => im.models[m] && verdict(im.models[m], st.thr))).size > 1;
+    if (ids.length > 1 && both.length) { const ag = document.createElement("div"); ag.className = "agree"; const same = both.filter(im => !dis(im)).length; ag.textContent = `The models give the same answer on ${same} of ${both.length} images (${Math.round(100 * same / both.length)}%).`; parts.push(ag); }
+    const shown = g.images.map((im, i) => [im, i]).filter(([im]) => !st.onlyDiff || (ids.every(m => im.models[m]) && dis(im)));
+    const pg = {label: g.label, images: shown.map(([im, i]) => ({f: im.f, cap: ids.filter(m => im.models[m]).map(m => `${mods[m].label}: ${mText(im.models[m], st.thr)}${im.models[m].top ? " (" + im.models[m].top.map(t => `${t[0]} ${t[1].toFixed(2)}`).join(", ") + ")" : ""}`).join("   |   ")}))};
+    const grid = document.createElement("div"); grid.className = "grid";
+    shown.forEach(([im, i], k) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "ph tile" + (ids.length > 1 && ids.every(m => im.models[m]) && dis(im) ? " dis" : "");
+      const img = document.createElement("img"); img.loading = "lazy"; img.decoding = "async"; img.src = proxy(im.f); img.alt = "";
+      const bs = document.createElement("span"); bs.className = "badges";
+      for (const m of ids) if (im.models[m]) { const bd = document.createElement("span"); bd.className = "badge" + (verdict(im.models[m], st.thr) === "Unsure" ? " u" : ""); const w = document.createElement("span"); w.className = "who"; w.textContent = m === "b32" ? "Y" : "N"; bd.append(w, mText(im.models[m], st.thr)); bs.append(bd); }
+      b.append(img, bs); b.addEventListener("click", () => openLightbox(pg, k)); grid.append(b);
+    });
+    parts.push(shown.length ? grid : Object.assign(document.createElement("div"), {className: "meta", textContent: "No disagreements."}));
+  }
+  ui.box.replaceChildren(...parts);
+}
+
+async function runModel(v, refresh = false) {
+  const id = v.scene_id; let st = predState.get(id);
+  if (!st) { st = {job: null, results: null, open: false, thr: 0.5, onlyDiff: false}; predState.set(id, st); }
+  if (st.job && RUNNING.includes(st.job.phase)) return;
+  if (!refresh && st.results && st.results.complete) { st.open = !st.open; renderPred(id); return; }
+  st.open = true; st.job = {phase: "queued"}; renderPred(id);
+  try {
+    const r = await fetch(BASE + "api/predict?scene_id=" + encodeURIComponent(id) + (refresh ? "&refresh=1" : ""));
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await pollPred(id);
+  } catch (e) { st.job = {phase: "error", error: "Request failed: " + e.message}; renderPred(id); }
+}
+
+async function runModelOn(id, urls) {
+  let st = predState.get(id);
+  if (!st) { st = {job: null, results: null, open: false, thr: 0.5, onlyDiff: false}; predState.set(id, st); }
+  if (st.job && RUNNING.includes(st.job.phase)) return;
+  st.open = true; st.job = {phase: "queued"}; renderPred(id);
+  try {
+    const r = await fetch(BASE + "api/predict-images", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({scene_id: id, urls})});
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    await pollPred(id);
+  } catch (e) { st.job = {phase: "error", error: "Request failed: " + e.message}; renderPred(id); }
+}
+
+async function pollPred(id) {
+  const st = predState.get(id);
+  try {
+    const j = await (await fetch(BASE + "api/predictions?scene_id=" + encodeURIComponent(id))).json();
+    st.job = j.job; st.results = {galleries: j.galleries, models: j.models, complete: j.complete};
+    renderPred(id);
+    if (RUNNING.includes(j.job.phase)) { clearTimeout(st.timer); st.timer = setTimeout(() => pollPred(id), 1000); }
+  } catch (e) { st.job = {phase: "error", error: "Lost contact with the dashboard: " + e.message}; renderPred(id); }
+}
+
+// ---- lightbox
+const lb = { g:null, i:0 };
+function lbShow() {
+  const im = lb.g.images[lb.i];
+  $("lb").querySelector("img").src = proxy(im.f);
+  $("lb").querySelector(".cap").textContent = `${lb.g.label} · ${lb.i + 1} / ${lb.g.images.length}${im.cap ? " · " + im.cap : ""}`;
+}
+function openLightbox(g, i) { lb.g = g; lb.i = i; $("lb").classList.add("open"); lbShow(); }
+function lbStep(d) { if (lb.g) { lb.i = (lb.i + d + lb.g.images.length) % lb.g.images.length; lbShow(); } }
+function lbClose() { $("lb").classList.remove("open"); $("lb").querySelector("img").removeAttribute("src"); lb.g = null; }
+$("lb").querySelector(".x").addEventListener("click", lbClose);
+$("lb").querySelector(".prev").addEventListener("click", e => { e.stopPropagation(); lbStep(-1); });
+$("lb").querySelector(".next").addEventListener("click", e => { e.stopPropagation(); lbStep(1); });
+$("lb").addEventListener("click", e => { if (e.target === $("lb")) lbClose(); });
+document.addEventListener("keydown", e => {
+  if (!lb.g) return;
+  if (e.key === "Escape") lbClose(); else if (e.key === "ArrowLeft") lbStep(-1); else if (e.key === "ArrowRight") lbStep(1);
+});
+
+async function poll(slug) {
+  clearTimeout(pollTimer);
+  try {
+    const r = await fetch(BASE + "api/job?slug=" + encodeURIComponent(slug));
+    const j = await r.json();
+    if (!r.ok) { setStatus(j.error, true); $("go").disabled = false; return; }
+    if (j.phase === "error") {
+      setStatus(j.error + (j.needs_setup ? "  (then reload this page)" : ""), true);
+      setProgress(null); $("go").disabled = false; return;
+    }
+    const sig = j.phase + j.total + (j.details_done || 0);
+    if (sig !== lastSig) {
+      lastSig = sig;
+      data = j;
+      $("results").hidden = !j.total;
+      render();
+    }
+    if (j.phase === "queued" || j.phase === "listing") {
+      setStatus(`Fetching video list... ${j.listing_count || 0} videos so far (page ${j.listing_page || 0})`);
+      setProgress(null);
+    } else if (j.phase === "details") {
+      setStatus(`${j.slug}: fetching categories ${j.details_done}/${j.details_total}. You can already browse and filter.`);
+      setProgress(j.details_done / j.details_total);
+    } else {
+      setStatus(j.total ? `${j.slug}${j.cached ? " (saved copy)" : ""}` : `${j.slug}: no videos found`, !j.total);
+      setProgress(null); $("go").disabled = false; return;
+    }
+    pollTimer = setTimeout(() => poll(slug), 1000);
+  } catch (e) { setStatus("Request failed: " + e.message, true); $("go").disabled = false; }
+}
+
+async function run(refresh) {
+  const name = $("name").value.trim();
+  if (!name) return;
+  $("go").disabled = true; $("results").hidden = true; data = null; lastSig = "";
+  F.cats.clear(); F.eths.clear(); rowCache.clear(); panels.clear(); photoData.clear();
+  setStatus("Starting..."); setProgress(null);
+  try {
+    const r = await fetch(`${BASE}api/scrape?name=${encodeURIComponent(name)}${refresh ? "&refresh=1" : ""}`);
+    const j = await r.json();
+    if (!r.ok) { setStatus(j.error, true); $("go").disabled = false; return; }
+    poll(j.slug);
+  } catch (e) { setStatus("Request failed: " + e.message, true); $("go").disabled = false; }
+}
+
+$("f").addEventListener("submit", e => { e.preventDefault(); run(false); });
+$("refresh").addEventListener("click", () => run(true));
+for (const id of ["filter", "studio", "costar", "year", "sort"]) $(id).addEventListener("input", render);
+$("mode").addEventListener("click", () => { F.anyMode = !F.anyMode; $("mode").textContent = "match: " + (F.anyMode ? "any" : "all"); $("mode").classList.toggle("on", F.anyMode); render(); });
+$("catmore").addEventListener("click", () => { F.showAllCats = !F.showAllCats; render(); });
+$("clear").addEventListener("click", () => {
+  F.cats.clear(); F.eths.clear(); $("filter").value = "";
+  for (const id of ["studio", "costar", "year"]) $(id).value = "";
+  render();
+});
+$("copy").addEventListener("click", async () => {
+  const urls = data.videos.filter(v => passes(v)).map(v => v.url).join("\n");
+  await navigator.clipboard.writeText(urls);
+  $("copy").textContent = "Copied"; setTimeout(() => $("copy").textContent = "Copy links", 1200);
+});
+fetch(BASE + "api/status").then(r => r.json()).then(s => {
+  $("saved").replaceChildren(...s.saved.map(x => new Option(x.replace(/-/g, " "))));
+  if (!s.session) setStatus("No saved session yet. Run  .venv/bin/python setup_session.py  once, then reload.", true);
+});
+
+// ================= Studios tab =================
+const S = { all:[], loaded:false, group:false };
+
+function showTab(name) {
+  for (const t of ["perf", "studios", "tags", "stars", "creators", "positions"]) {
+    $("pg-" + t).hidden = t !== name;
+    $("tab-" + t).setAttribute("aria-selected", String(t === name));
+  }
+  if (name !== "positions") { try { history.replaceState(null, "", name === "perf" ? location.pathname : "#" + name); } catch (e) {} }
+  if (name === "studios" && !S.loaded) loadStudios();
+  if (name === "tags") loadTags();
+  if (name === "stars" && !P.loaded) loadStars();
+  if (name === "creators") loadCreators();
+  if (name === "positions") openPositions();
+}
+$("tab-perf").addEventListener("click", () => showTab("perf"));
+$("tab-studios").addEventListener("click", () => showTab("studios"));
+$("tab-tags").addEventListener("click", () => showTab("tags"));
+$("tab-stars").addEventListener("click", () => showTab("stars"));
+$("tab-creators").addEventListener("click", () => showTab("creators"));
+$("tab-positions").addEventListener("click", () => { POS.parent = POS.sub = null; setPosHash(); showTab("positions"); });
+
+// ================= Run the model on many videos of a creator =================
+const BT = { timer: null, last: null };
+const mmss = sec => { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
+async function batchPoll() {
+  let j = null;
+  try { j = (await (await fetch(BASE + "api/batch/status")).json()).job; } catch (e) { return; }
+  BT.last = j;
+  const mine = j && data && j.slug === data.slug, running = !!j && j.phase === "running";
+  $("bgo").disabled = running; $("bcancel").hidden = !(running && mine);
+  $("bprog").hidden = !(mine && (running || j.phase === "done" || j.phase === "cancelled"));
+  if (!j) { $("binfo").textContent = "Takes the first look at every video's stills, so you can see them grouped by position. Photos are only read, never stored."; return; }
+  if (!mine) { $("binfo").textContent = running ? `A batch for ${j.slug} is running (${j.videos_done} of ${j.videos_total} videos). Wait for it to finish, or open that creator to cancel it.` : ""; return; }
+  const frac = j.videos_total ? j.videos_done / j.videos_total : 0;
+  $("bprog").firstElementChild.firstElementChild.style.width = Math.round((j.phase === "done" ? 1 : frac) * 100) + "%";
+  const tail = `${j.images_done.toLocaleString()} images done${j.images_skipped ? `, ${j.images_skipped.toLocaleString()} skipped (already analysed)` : ""}${j.failed_images ? `, ${j.failed_images} could not be read` : ""}${j.failed_videos ? `, ${j.failed_videos} videos failed` : ""}`;
+  if (running) $("binfo").textContent = `${j.cancelling ? "Cancelling... " : ""}${j.stage === "model" ? "The model is looking at the images" : j.stage === "listing" ? "Finding the photos" : "Downloading the images"} · video ${j.videos_done} of ${j.videos_total} · ${tail}${j.eta_seconds != null ? ` · about ${mmss(j.eta_seconds)} left` : ""}${j.current ? ` · ${j.current}` : ""}`;
+  else if (j.phase === "error") $("binfo").textContent = "Stopped: " + j.error + (j.needs_setup ? "  (run setup_session.py, then reload this page)" : "");
+  else $("binfo").textContent = `${j.phase === "cancelled" ? "Cancelled" : "Done"}: ${j.videos_done} of ${j.videos_total} videos · ${tail}. Use "See results by position" to look through them.`;
+}
+function batchSchedule() { clearInterval(BT.timer); BT.timer = setInterval(batchPoll, 2000); batchPoll(); }
+$("bgo").addEventListener("click", async () => {
+  if (!data) return;
+  const mode = document.querySelector('input[name="bmode"]:checked').value;
+  const r = await fetch(BASE + "api/batch/start", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({slug: data.slug, mode, count: Number($("bcount").value) || 50, photosets: $("bphotos").checked, only_new: $("bnew").checked})});
+  const j = await r.json();
+  if (!r.ok) { $("binfo").textContent = j.error; return; }
+  batchPoll();
+});
+$("bcancel").addEventListener("click", async () => { await fetch(BASE + "api/batch/cancel", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}); batchPoll(); });
+$("bview").addEventListener("click", () => { POS.creator = data ? data.slug : ""; POS.parent = POS.sub = null; setPosHash(); showTab("positions"); });
+batchSchedule();
+
+// ================= By position: the images grouped by what the model found =================
+const POS = { creator: "", parent: null, sub: null, items: [], total: 0, groups: null, loadedCreators: false };
+function readPosHash() {
+  const parts = decodeURIComponent(location.hash.slice(1)).split("/");
+  POS.parent = parts[1] || null; POS.sub = parts[2] || null;
+}
+function setPosHash() {
+  const h = "#positions" + (POS.parent ? "/" + encodeURIComponent(POS.parent) + (POS.sub ? "/" + encodeURIComponent(POS.sub) : "") : "");
+  if (location.hash !== h) { try { history.pushState(null, "", h); } catch (e) {} }
+}
+const posQuery = () => `creator=${encodeURIComponent($("pos-creator").value)}&type=${$("pos-type").value}&min=${$("pos-min").value}&submin=${$("pos-submin").value}`;
+async function openPositions() {
+  if (!POS.loadedCreators) {
+    const d = await (await fetch(BASE + "api/creators")).json();
+    for (const c of d.creators) $("pos-creator").append(new Option(`${c.name} (${c.with_model} analysed)`, c.slug));
+    POS.loadedCreators = true;
+  }
+  if (POS.creator != null) $("pos-creator").value = POS.creator;
+  await renderPositions();
+}
+for (const id of ["pos-creator", "pos-type", "pos-min", "pos-submin"]) $(id).addEventListener("change", () => { POS.creator = $("pos-creator").value; renderPositions(); });
+const nf = n => n.toLocaleString();
+function crumb() {
+  const c = $("pos-crumb"); c.replaceChildren();
+  const link = (txt, fn) => { const a = document.createElement("a"); a.href = "#"; a.textContent = txt; a.addEventListener("click", e => { e.preventDefault(); fn(); }); return a; };
+  c.append(link("By position", () => { POS.parent = POS.sub = null; setPosHash(); renderPositions(); }));
+  if (POS.parent) { c.append(" › "); c.append(POS.sub ? link(POS.parent, () => { POS.sub = null; setPosHash(); renderPositions(); }) : document.createTextNode(POS.parent)); }
+  if (POS.sub) c.append(" › " + POS.sub);
+}
+async function renderPositions() {
+  crumb();
+  const g = await (await fetch(BASE + "api/position-groups?" + posQuery())).json();
+  POS.groups = g;
+  $("pos-count").textContent = g.total ? `${nf(g.total)} images from ${nf(g.videos)} videos` : "Nothing yet";
+  const body = $("pos-body"); body.replaceChildren();
+  if (!g.total) { body.append(Object.assign(document.createElement("div"), {className: "meta", style: "padding:14px", textContent: "No images with model results here yet. Open a creator on the Performers tab and press \"Run the model\" (all videos or a random number), or run the model on a video's photos."})); return; }
+  if (!POS.parent) return renderOverview(g, body);
+  const node = g.positions.find(p => p.name === POS.parent);
+  if (!node) { body.append(Object.assign(document.createElement("div"), {className: "meta", style: "padding:14px", textContent: `No images are grouped under ${POS.parent} with these settings.`})); return; }
+  if (!POS.sub && node.subs.length) body.append(subTable(node));
+  await renderGrid(body);
+}
+function subTable(node) {
+  const t = document.createElement("div"); t.className = "panel";
+  const h = document.createElement("div"); h.className = "row"; h.innerHTML = ""; const st = document.createElement("strong"); st.textContent = `${node.name}: ${nf(node.count)} images by sub-type`; h.append(st); t.append(h);
+  for (const s of node.subs) {
+    const row = document.createElement("div"); row.className = "posrow";
+    const a = document.createElement("a"); a.href = "#"; a.textContent = s.name; a.className = "nm";
+    a.addEventListener("click", e => { e.preventDefault(); POS.parent = node.name; POS.sub = s.name; setPosHash(); renderPositions(); });
+    const bar = document.createElement("span"); bar.className = "pbar"; const i = document.createElement("i"); i.style.width = Math.round(100 * s.count / node.count) + "%"; bar.append(i);
+    const n = document.createElement("span"); n.className = "cnt"; n.textContent = `${nf(s.count)} · ${Math.round(100 * s.count / node.count)}%`;
+    row.append(a, bar, n); t.append(row);
+  }
+  return t;
+}
+function renderOverview(g, body) {
+  for (const p of g.positions) {
+    const card = document.createElement("div"); card.className = "panel pcard";
+    const head = document.createElement("div"); head.className = "row";
+    const a = document.createElement("a"); a.href = "#"; a.className = "ptitle"; a.textContent = p.name === "Unsure" ? `Unsure (position under ${$("pos-min").value})` : p.name;
+    a.addEventListener("click", e => { e.preventDefault(); POS.parent = p.name; POS.sub = null; setPosHash(); renderPositions(); });
+    const c = document.createElement("span"); c.className = "meta"; c.textContent = `${nf(p.count)} images · ${Math.round(100 * p.count / g.total)}% of all`;
+    head.append(a, c); card.append(head);
+    const th = document.createElement("div"); th.className = "psamples";
+    for (const u of p.sample) { const im = document.createElement("img"); im.src = proxy(u); im.loading = "lazy"; th.append(im); }
+    if (p.sample.length) card.append(th);
+    if (p.subs.length) {
+      for (const s of p.subs) {
+        const row = document.createElement("div"); row.className = "posrow";
+        const l = document.createElement("a"); l.href = "#"; l.className = "nm"; l.textContent = s.name;
+        l.addEventListener("click", e => { e.preventDefault(); POS.parent = p.name; POS.sub = s.name; setPosHash(); renderPositions(); });
+        const bar = document.createElement("span"); bar.className = "pbar"; const i = document.createElement("i"); i.style.width = Math.round(100 * s.count / p.count) + "%"; bar.append(i);
+        const n = document.createElement("span"); n.className = "cnt"; n.textContent = `${nf(s.count)}`;
+        row.append(l, bar, n); card.append(row);
+      }
+    }
+    body.append(card);
+  }
+}
+const PAGE = 120;
+async function renderGrid(body) {
+  const sortSel = document.createElement("select"); for (const [v, t] of [["conf", "Most confident first"], ["random", "Random order"], ["video", "By video"]]) sortSel.append(new Option(t, v));
+  sortSel.value = POS.sort || "conf"; sortSel.addEventListener("change", () => { POS.sort = sortSel.value; renderPositions(); });
+  const bar = document.createElement("div"); bar.className = "row"; bar.style.margin = "10px 0"; bar.append(sortSel);
+  const head = document.createElement("strong"); bar.append(head);
+  const grid = document.createElement("div"); grid.className = "grid pgrid"; body.append(bar, grid);
+  const more = document.createElement("button"); more.className = "ghost"; more.type = "button"; body.append(more);
+  POS.items = []; let total = 0;
+  const q = () => `${posQuery()}&position=${encodeURIComponent(POS.parent)}&sub=${encodeURIComponent(POS.sub || "")}&sort=${sortSel.value}&offset=${POS.items.length}&limit=${PAGE}`;
+  const load = async () => {
+    const d = await (await fetch(BASE + "api/position-images?" + q())).json();
+    total = d.total; const start = POS.items.length; POS.items.push(...d.images);
+    const pg = POS.pg = {label: POS.sub ? `${POS.parent} › ${POS.sub}` : POS.parent, images: POS.items.map(x => ({f: x.f, cap: `${x.title} · ${x.creators.join(", ")} · ${x.best} ${x.confidence.toFixed(2)}${x.sub ? " · " + x.sub + " " + (x.sub_conf != null ? x.sub_conf.toFixed(2) : "") : ""}`}))};
+    d.images.forEach((x, k) => {
+      const w = document.createElement("div"); w.className = "pw";
+      const b = document.createElement("button"); b.type = "button"; b.className = "ph";
+      const im = document.createElement("img"); im.loading = "lazy"; im.decoding = "async"; im.src = proxy(x.t); im.alt = x.title;
+      b.append(im); b.addEventListener("click", () => openLightbox(POS.pg, start + k));
+      const badge = document.createElement("span"); badge.className = "pbadge"; badge.textContent = x.confidence.toFixed(2) + (x.sub && !POS.sub ? " · " + x.sub : "");
+      const cap = document.createElement("a"); cap.className = "pcap"; cap.href = x.scene_url || "#"; cap.target = "_blank"; cap.rel = "noopener"; cap.textContent = x.title; cap.title = x.title;
+      w.append(b, badge, cap); grid.append(w);
+    });
+    head.textContent = `${nf(total)} images`; more.hidden = POS.items.length >= total; more.textContent = `Show ${Math.min(PAGE, total - POS.items.length)} more (${nf(total - POS.items.length)} left)`;
+  };
+  more.addEventListener("click", load); await load();
+}
+
+// ================= Scraped creators tab =================
+const CR = { all: [] };
+async function loadCreators() {
+  const d = await (await fetch(BASE + "api/creators")).json();
+  CR.all = d.creators; renderCreators();
+}
+function renderCreators() {
+  const q = $("c-q").value.trim().toLowerCase();
+  const list = CR.all.filter(c => !q || c.name.toLowerCase().includes(q) || c.slug.includes(q));
+  $("c-count").textContent = `${list.length}${list.length !== CR.all.length ? " / " + CR.all.length : ""} creators, ${CR.all.reduce((n, c) => n + c.videos, 0)} videos`;
+  $("c-list").replaceChildren(...list.map(c => {
+    const row = document.createElement("div"); row.className = "srow";
+    const img = document.createElement("img"); img.src = c.thumbnail || ""; img.referrerPolicy = "no-referrer"; img.style.cssText = "width:64px;height:36px;object-fit:cover;border-radius:4px;background:var(--line);flex:none";
+    const a = document.createElement("a"); a.href = "#"; a.className = "nm"; a.textContent = c.name; a.addEventListener("click", e => { e.preventDefault(); $("name").value = c.slug; showTab("perf"); run(false); });
+    const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = `${c.videos} videos` + (c.with_model ? ` · ${c.with_model} with model results` : "");
+    const d = document.createElement("span"); d.className = "slug"; d.textContent = "scraped " + new Date(c.scraped * 1000).toLocaleDateString(undefined, {day: "numeric", month: "short", year: "numeric"});
+    row.append(img, a, cnt, d); return row;
+  }));
+}
+$("c-q").addEventListener("input", renderCreators);
+
+async function loadStudios() {
+  const d = await (await fetch(BASE + "api/studios")).json();
+  S.all = d.studios; S.loaded = true; S.scraped = d.scraped_at;
+  const parents = new Map();
+  for (const s of S.all) if (s.parent) parents.set(s.parent, (parents.get(s.parent) || 0) + 1);
+  const opts = [...parents].map(([slug, n]) => [slug, S.all.find(x => x.slug === slug)?.name || slug, n]).sort((a, b) => a[1].localeCompare(b[1]));
+  $("s-parent").replaceChildren(new Option("Any channel", ""), ...opts.map(([slug, name, n]) => new Option(`${name} (${n} sub-channels)`, slug)));
+  renderStudios();
+}
+
+function renderStudios() {
+  const q = $("s-q").value.trim().toLowerCase(), type = $("s-type").value, parent = $("s-parent").value, sort = $("s-sort").value;
+  let rows = S.all.filter(s =>
+    (!q || s.name.toLowerCase().includes(q) || s.slug.includes(q) || (s.parent_name || "").toLowerCase().includes(q)) &&
+    (type === "all" || (type === "top" ? !s.parent : !!s.parent)) &&
+    (!parent || s.parent === parent || s.slug === parent));
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, {sensitivity:"base", numeric:true});
+  const cmp = { az:byName, za:(a, b) => byName(b, a), most:(a, b) => b.scenes - a.scenes || byName(a, b), least:(a, b) => a.scenes - b.scenes || byName(a, b) }[sort];
+  if (S.group) {
+    // children sit under their parent; groups follow the chosen sort, using the parent's figures
+    const key = s => s.parent || s.slug;
+    const head = new Map(S.all.filter(s => !s.parent).map(s => [s.slug, s]));
+    const groups = new Map();
+    for (const s of rows) { const k = key(s); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
+    const order = [...groups].sort(([ka], [kb]) => cmp(head.get(ka) || groups.get(ka)[0], head.get(kb) || groups.get(kb)[0]));
+    rows = order.flatMap(([, items]) => items.sort((a, b) => (a.parent ? 1 : 0) - (b.parent ? 1 : 0) || cmp(a, b)));
+  } else rows.sort(cmp);
+
+  const total = S.all.length, subs = S.all.filter(s => s.parent).length;
+  $("s-count").textContent = rows.length === total ? `${total} studios` : `${rows.length} / ${total} studios`;
+  $("s-info").textContent = total ? `${total - subs} top-level · ${subs} sub-channels · last scraped ${S.scraped || "never"}` : "No studios saved yet. Click \"Re-scrape from data18\".";
+  $("s-group").classList.toggle("on", S.group);
+
+  const frag = document.createDocumentFragment();
+  for (const s of rows) {
+    const row = document.createElement("div");
+    row.className = "srow" + (S.group && s.parent ? " child" : "") + (S.group && !s.parent ? " parentrow" : "");
+    const a = document.createElement("a"); a.className = "nm"; a.href = s.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = s.name;
+    row.append(a);
+    if (s.parent && !S.group) {
+      const via = document.createElement("button"); via.type = "button"; via.className = "chip via"; via.style.setProperty("--h", catHue(s.parent));
+      via.textContent = "↳ " + s.parent_name; via.title = "Show only this channel's sub-channels";
+      via.addEventListener("click", () => { $("s-parent").value = s.parent; renderStudios(); });
+      row.append(via);
+    }
+    const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = s.scenes.toLocaleString() + " scenes";
+    row.append(cnt);
+    frag.append(row);
+  }
+  $("s-list").replaceChildren(frag);
+}
+
+for (const id of ["s-q", "s-type", "s-parent", "s-sort"]) $(id).addEventListener("input", renderStudios);
+$("s-group").addEventListener("click", () => { S.group = !S.group; renderStudios(); });
+$("s-copy").addEventListener("click", async () => {
+  const q = $("s-q").value.trim().toLowerCase();
+  const urls = [...document.querySelectorAll("#s-list a.nm")].map(a => a.href).join("\n");
+  await navigator.clipboard.writeText(urls);
+  $("s-copy").textContent = "Copied"; setTimeout(() => $("s-copy").textContent = "Copy links", 1200);
+});
+$("s-refresh").addEventListener("click", async () => {
+  $("s-refresh").disabled = true; $("s-info").textContent = "Scraping studios...";
+  await fetch(BASE + "api/studios/refresh");
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const j = await (await fetch(BASE + "api/studios/job")).json();
+    if (j.phase === "running") { $("s-info").textContent = `Scraping studios... page ${j.page}, ${j.count} so far`; continue; }
+    if (j.phase === "error") $("s-info").textContent = j.error + (j.needs_setup ? "  (then reload this page)" : "");
+    else await loadStudios();
+    break;
+  }
+  $("s-refresh").disabled = false;
+});
+
+
+// ================= Tags tab =================
+const T = { all:[], only:false, open:new Set(), vids:new Map() };
+
+async function loadTags() {
+  const d = await (await fetch(BASE + "api/tags")).json();   // refreshed every visit: new videos change the counts
+  T.all = d.tags; T.scrapedAt = d.scraped_at; T.unlisted = d.unlisted || [];
+  renderTags();
+}
+
+function renderTags() {
+  const q = $("t-q").value.trim().toLowerCase(), sort = $("t-sort").value;
+  let rows = T.all.filter(t => (!q || t.name.toLowerCase().includes(q) || t.slug.includes(q)) && (!T.only || t.videos));
+  rows = rows.slice().sort(sort === "most"
+    ? (a, b) => b.videos - a.videos || a.name.localeCompare(b.name)
+    : (a, b) => a.name.localeCompare(b.name, undefined, {sensitivity:"base"}));
+  const withVideos = T.all.filter(t => t.videos).length;
+  $("t-count").textContent = rows.length === T.all.length ? `${T.all.length} tags` : `${rows.length} / ${T.all.length} tags`;
+  $("t-info").textContent = T.all.length
+    ? `${withVideos} have videos from your scraped performers` + (T.unlisted.length ? ` · ${T.unlisted.length} tags on videos aren't in the list` : "")
+    : "No tags saved yet.";
+  $("t-only").classList.toggle("on", T.only);
+  $("t-list").replaceChildren(...rows.map(tagRow));
+}
+
+function tagRow(t) {
+  const row = document.createElement("div"); row.className = "trow" + (t.videos ? "" : " empty");
+  const head = document.createElement("button"); head.type = "button"; head.className = "thead";
+  head.setAttribute("aria-expanded", String(T.open.has(t.slug)));
+  const arrow = document.createElement("span"); arrow.className = "arrow"; arrow.textContent = t.videos ? "▸" : "";
+  const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = t.name;
+  const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = t.videos ? `${t.videos} video${t.videos === 1 ? "" : "s"}` : "0";
+  const link = document.createElement("a"); link.className = "tlink"; link.href = t.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "data18 ↗";
+  link.addEventListener("click", e => e.stopPropagation());
+  head.append(arrow, nm, link, cnt);
+  row.append(head);
+  if (t.videos) {
+    head.addEventListener("click", () => toggleTag(t, row, head));
+    if (T.open.has(t.slug)) fillTag(t, row);
+  }
+  return row;
+}
+
+async function toggleTag(t, row, head) {
+  if (T.open.has(t.slug)) { T.open.delete(t.slug); row.querySelector(".tvids")?.remove(); head.setAttribute("aria-expanded", "false"); return; }
+  T.open.add(t.slug); head.setAttribute("aria-expanded", "true"); fillTag(t, row);
+}
+
+async function fillTag(t, row) {
+  const box = document.createElement("div"); box.className = "tvids"; box.textContent = "Loading...";
+  row.append(box);
+  if (!T.vids.has(t.slug)) T.vids.set(t.slug, (await (await fetch(BASE + "api/tag-videos?slug=" + encodeURIComponent(t.slug))).json()).videos);
+  if (!box.isConnected) return;
+  box.replaceChildren(...T.vids.get(t.slug).map(v => {
+    const d = document.createElement("div"); d.className = "tv";
+    const img = document.createElement("img"); img.src = v.thumbnail; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+    const info = document.createElement("div");
+    const a = document.createElement("a"); a.href = v.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = v.title;
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = [v.date, v.studio, "scraped from " + v.scraped_from.join(", ")].filter(Boolean).join(" · ");
+    info.append(a, meta); d.append(img, info);
+    return d;
+  }));
+}
+
+$("t-q").addEventListener("input", renderTags);
+$("t-sort").addEventListener("input", renderTags);
+$("t-only").addEventListener("click", () => { T.only = !T.only; renderTags(); });
+
+
+// ================= Pornstars tab =================
+// rows from the server: [slug, name, picture, scenes, movies, rank]
+const P = { all:[], loaded:false, only:false, shown:0, rows:[] };
+const BATCH = 120;
+
+async function loadStars() {
+  $("p-info").textContent = "Loading...";
+  const d = await (await fetch(BASE + "api/pornstars")).json();
+  P.all = d.stars.map(([slug, name, pic, scenes, movies, rank]) => ({slug, name, pic, scenes, movies, rank, key:name.toLowerCase()}));
+  P.loaded = true; P.scrapedAt = d.scraped_at;
+  renderStars();
+}
+
+function renderStars() {
+  const q = $("p-q").value.trim().toLowerCase(), sort = $("p-sort").value;
+  let rows = P.all.filter(x => (!q || x.key.includes(q)) && (!P.only || x.pic));
+  const az = (a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  rows = rows.slice().sort({ site:(a, b) => b.rank - a.rank, az, za:(a, b) => az(b, a),
+                            most:(a, b) => b.scenes - a.scenes || az(a, b) }[sort]);
+  P.rows = rows; P.shown = 0;
+  const withPic = P.all.filter(x => x.pic).length;
+  $("p-count").textContent = rows.length === P.all.length ? `${P.all.length.toLocaleString()} pornstars` : `${rows.length.toLocaleString()} / ${P.all.length.toLocaleString()}`;
+  $("p-info").textContent = P.all.length
+    ? `${withPic.toLocaleString()} with a photo · last scraped ${P.scrapedAt}`
+    : 'No pornstars saved yet. Click "Re-scrape from data18" (takes about 2 minutes).';
+  $("p-pics").classList.toggle("on", P.only);
+  $("p-grid").replaceChildren();
+  showMoreStars();
+}
+
+function showMoreStars() {
+  const next = P.rows.slice(P.shown, P.shown + BATCH);
+  P.shown += next.length;
+  const frag = document.createDocumentFragment();
+  for (const x of next) {
+    const a = document.createElement("a"); a.className = "pcard"; a.href = "https://www.data18.com/name/" + x.slug; a.target = "_blank"; a.rel = "noopener";
+    const pic = document.createElement("div"); pic.className = "pic";
+    if (x.pic) { const img = document.createElement("img"); img.src = x.pic; img.alt = ""; img.loading = "lazy"; img.referrerPolicy = "no-referrer"; pic.append(img); }
+    else pic.textContent = x.name.split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
+    const n = document.createElement("div"); n.className = "pn"; n.textContent = x.name;
+    const sc = document.createElement("div"); sc.className = "ps"; sc.textContent = `${x.scenes.toLocaleString()} scene${x.scenes === 1 ? "" : "s"}`;
+    a.append(pic, n, sc); frag.append(a);
+  }
+  $("p-grid").append(frag);
+  $("p-more").textContent = P.shown < P.rows.length ? `Showing ${P.shown.toLocaleString()} of ${P.rows.length.toLocaleString()}. Scroll or click here for more` : (P.rows.length ? "" : "No matches");
+}
+// load the next batch as the bottom comes into view (observer, with a scroll listener as backup)
+function fillStars() {
+  while (!$("pg-stars").hidden && P.shown < P.rows.length && $("p-more").getBoundingClientRect().top < innerHeight + 600) showMoreStars();
+}
+new IntersectionObserver(es => { if (es[0].isIntersecting) fillStars(); }, {rootMargin:"600px"}).observe($("p-more"));
+$("p-more").addEventListener("click", () => { for (let i = 0; i < 4 && P.shown < P.rows.length; i++) showMoreStars(); });
+let fillQueued = false;
+addEventListener("scroll", () => { if (!fillQueued) { fillQueued = true; setTimeout(() => { fillQueued = false; fillStars(); }, 80); } }, {passive:true});
+
+let pTimer;
+$("p-q").addEventListener("input", () => { clearTimeout(pTimer); pTimer = setTimeout(renderStars, 150); });
+$("p-sort").addEventListener("input", renderStars);
+$("p-pics").addEventListener("click", () => { P.only = !P.only; renderStars(); });
+$("p-refresh").addEventListener("click", async () => {
+  $("p-refresh").disabled = true; $("p-info").textContent = "Scraping...";
+  await fetch(BASE + "api/pornstars/refresh");
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const j = await (await fetch(BASE + "api/pornstars/job")).json();
+    if (j.phase === "running") { $("p-info").textContent = `Scraping... page ${j.page} of about 560, ${j.count.toLocaleString()} so far`; continue; }
+    if (j.phase === "error") { $("p-info").textContent = j.error + (j.needs_setup ? "  (then reload this page)" : ""); break; }
+    await loadStars(); break;
+  }
+  $("p-refresh").disabled = false;
+});
+{ const h = location.hash.slice(1); if (h === "studios" || h === "tags" || h === "stars") showTab(h); else if (h.startsWith("positions")) { readPosHash(); showTab("positions"); } }
+window.addEventListener("hashchange", () => { if (location.hash.startsWith("#positions")) { readPosHash(); showTab("positions"); } });
+</script>
+</body>
+</html>
